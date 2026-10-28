@@ -1,14 +1,14 @@
-# 콩깍지 (Kongpod)
+# Tasky (옛 이름 콩깍지)
 
 macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없이 Command Line Tools로 빌드. git 사용(https://github.com/hyeon0208/tasky, MIT).
 작업 방식은 [AI-NATIVE-GUIDE.md](AI-NATIVE-GUIDE.md)를 따른다. 기능 문서는 `intent/<기능>/`.
 
 ## 명령
 - 빌드: `swift build`
-- 자체 검사: `.build/debug/Kongpod --selftest` (위치·링 계산, 작업 알림 상태 전환, 훅→소켓 왕복은 `KONGPOD_HOME=<임시폴더>`일 때)
-- 변환만 확인: `.build/debug/Kongpod --convert <ConvertOp> <파일...>`
-- 훅 연결: `.build/debug/Kongpod --connect|--disconnect claude|codex` (`KONGPOD_HOME`으로 실제 설정 대신 임시 폴더 사용 가능)
-- 실행: `.build/debug/Kongpod` (메뉴 막대 잎 아이콘 → 종료). `--debug`를 붙이면 설정에 '개발자' 탭(CPU·메모리·화면 갱신·애니메이션·타이머, CSV 기록)
+- 자체 검사: `.build/debug/Tasky --selftest` (위치·링 계산, 작업 알림 상태 전환, 훅→소켓 왕복은 `TASKY_HOME=<임시폴더>`일 때)
+- 변환만 확인: `.build/debug/Tasky --convert <ConvertOp> <파일...>`
+- 훅 연결: `.build/debug/Tasky --connect|--disconnect claude|codex` (`TASKY_HOME`으로 실제 설정 대신 임시 폴더 사용 가능)
+- 실행: `.build/debug/Tasky` (메뉴 막대 잎 아이콘 → 종료). `--debug`를 붙이면 설정에 '개발자' 탭(CPU·메모리·화면 갱신·애니메이션·타이머, CSV 기록)
 
 ## 구조
 - `PetController.swift`: 펫 한 마리(위치·빼꼼·링·서랍·알림·설정 창), `App`(펫 목록·메뉴 막대·훅 서버), `LoginItem`

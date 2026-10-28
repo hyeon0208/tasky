@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Kongpod",
+    name: "Tasky",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Kongpod", path: "Sources/Kongpod")
+        .executableTarget(name: "Tasky", path: "Sources/Tasky")
     ]
 )

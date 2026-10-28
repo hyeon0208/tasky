@@ -206,7 +206,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
     private let pathControl = NSPathControl()
     private var root: FileNode?
     private let onClose: () -> Void
-    private static let tablePasteType = NSPasteboard.PasteboardType("kongpod.folder-row")
+    private static let tablePasteType = NSPasteboard.PasteboardType("tasky.folder-row")
 
     init(size: CGSize, onClose: @escaping () -> Void) {
         self.onClose = onClose

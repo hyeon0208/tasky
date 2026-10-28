@@ -108,7 +108,7 @@ enum Geometry {
     }
 }
 
-/// `Kongpod --selftest`로 실행하는 최소 검증.
+/// `Tasky --selftest`로 실행하는 최소 검증.
 enum SelfTest {
     static func run() -> Int32 {
         let v = CGRect(x: 0, y: 0, width: 1440, height: 875)
@@ -169,8 +169,17 @@ enum SelfTest {
         store.apply(ev("SessionEnd"))
         check(store.sessions.isEmpty, "세션 종료")
 
-        // 훅 → 소켓 → 앱 (KONGPOD_HOME 임시 폴더에서)
-        if ProcessInfo.processInfo.environment["KONGPOD_HOME"] != nil {
+        // 훅 → 소켓 → 앱 (TASKY_HOME 임시 폴더에서)
+        if ProcessInfo.processInfo.environment["TASKY_HOME"] != nil {
+            // 이름 바꾸기: 옛 Kongpod 실행 파일을 가리키는 훅을 찾아 새 것으로 갈아 끼운다
+            let file = HookInstaller.Tool.claude.file
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data(#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"/old/Kongpod\" --hook claude"},{"type":"command","command":"other"}]}]}}"#.utf8).write(to: file)
+            check(HookInstaller.pointsToLegacy(.claude), "옛 훅 찾기")
+            try? HookInstaller.set(.claude, installed: true)
+            let after = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+            check(!HookInstaller.pointsToLegacy(.claude) && HookInstaller.isInstalled(.claude) && after.contains("other"), "옛 훅을 새 것으로, 다른 훅은 그대로")
+            try? FileManager.default.removeItem(at: file)
             var got: [String: Any]?
             let server = HookServer { got = $0 }
             server.start()
@@ -260,7 +269,7 @@ enum SelfTest {
         check(only.map(\.id) == ["c"] && PetController.accepts("all", tool: "codex"), "펫 도구 설정에 맞는 작업만")
 
         // F11 캐릭터: 그림 찾기(임시 폴더)
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent("kongpod-f11-\(UUID().uuidString)")
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-f11-\(UUID().uuidString)")
         let png = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8, samplesPerPixel: 4,
                                    hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
             .representation(using: .png, properties: [:])!

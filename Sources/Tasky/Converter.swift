@@ -217,7 +217,7 @@ enum Converter {
         case .sheetToCSV: return try XLSX.toCSV(src)
         case .zip: return [try zip(urls)]
         case .unarchive:
-            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("kongpod-\(UUID().uuidString)")
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             do { try run(URL(fileURLWithPath: "/usr/bin/tar"), ["-xf", src.path, "-C", dir.path]) }
             catch { try? FileManager.default.removeItem(at: dir); throw ConvertError("압축을 풀지 못했어요") }
@@ -421,7 +421,7 @@ enum Converter {
         if urls.count == 1 {
             try run(URL(fileURLWithPath: "/usr/bin/ditto"), ["-c", "-k", "--sequesterRsrc", "--keepParent", urls[0].path, out.path])
         } else {
-            let stage = fm.temporaryDirectory.appendingPathComponent("kongpod-\(UUID().uuidString)")
+            let stage = fm.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString)")
             try fm.createDirectory(at: stage, withIntermediateDirectories: true)
             defer { try? fm.removeItem(at: stage) }
             for u in urls { try fm.copyItem(at: u, to: stage.appendingPathComponent(u.lastPathComponent)) }
@@ -455,7 +455,7 @@ enum Converter {
     // MARK: 파일 이름
 
     private static func tempURL(ext: String) -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("kongpod-\(UUID().uuidString).\(ext)")
+        FileManager.default.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString).\(ext)")
     }
 
     /// 임시 결과를 원본 옆 `이름 (깍지).확장자`로 옮긴다. 겹치면 `(깍지 2)`.
@@ -490,7 +490,7 @@ enum Converter {
 enum XLSX {
     static func toCSV(_ src: URL) throws -> [URL] {
         let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent("kongpod-\(UUID().uuidString)")
+        let dir = fm.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: dir) }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -510,7 +510,7 @@ enum XLSX {
             if target.hasPrefix("/") { target.removeFirst() } else { target = "xl/" + target }
             let rows = XMLItems(url: dir.appendingPathComponent(target)).cells(shared: shared)
             let csv = rows.map { $0.map(quote).joined(separator: ",") }.joined(separator: "\r\n")
-            let tmp = fm.temporaryDirectory.appendingPathComponent("kongpod-\(UUID().uuidString).csv")
+            let tmp = fm.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString).csv")
             // 엑셀에서 한글이 깨지지 않도록 BOM을 붙인다
             try (Data([0xEF, 0xBB, 0xBF]) + Data(csv.utf8)).write(to: tmp)
             let label = sheets.count > 1 ? (sheet["name"] ?? "시트") : nil

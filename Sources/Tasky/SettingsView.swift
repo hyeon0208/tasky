@@ -179,7 +179,7 @@ final class KeyTestField: NSStackView {
 /// 시계 말풍선 보이기 방식(모든 펫 공통, 기본: 항상)
 enum ClockMode: String, CaseIterable {
     case always, hover, off
-    static let changed = Notification.Name("kongpodClockModeChanged")
+    static let changed = Notification.Name("taskyClockModeChanged")
     var title: String {
         switch self {
         case .always: "항상"

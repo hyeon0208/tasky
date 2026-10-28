@@ -1,17 +1,20 @@
 import AppKit
 
 // Claude Code·Codex 작업 알림.
-// 도구가 실행하는 훅 → `Kongpod --hook <도구>`가 이벤트를 앱 소켓으로 보내고 바로 끝난다.
-// 콩깍지는 이벤트만 받으므로 도구의 로그인 방식(구독·API 키)과 상관없고, 계정 정보를 다루지 않는다.
+// 도구가 실행하는 훅 → `Tasky --hook <도구>`가 이벤트를 앱 소켓으로 보내고 바로 끝난다.
+// Tasky는 이벤트만 받으므로 도구의 로그인 방식(구독·API 키)과 상관없고, 계정 정보를 다루지 않는다.
 
 enum Paths {
     static let support: URL = {
-        let dir = (ProcessInfo.processInfo.environment["KONGPOD_HOME"].map { URL(fileURLWithPath: $0) }
+        let dir = (ProcessInfo.processInfo.environment["TASKY_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
-            .appendingPathComponent("Kongpod")
+            .appendingPathComponent("Tasky")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+    /// 옛 이름(콩깍지) 때의 폴더
+    static let legacySupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Kongpod")
     static let socket = support.appendingPathComponent("hook.sock").path
     /// 펫이 꺼져 있을 때 훅이 이벤트를 적어 두는 곳
     static let spool = support.appendingPathComponent("spool.jsonl")
@@ -208,8 +211,8 @@ enum HookInstaller {
     enum Tool: String { case claude, codex
         var title: String { self == .claude ? "Claude Code" : "Codex" }
         var file: URL {
-            // KONGPOD_HOME: 검증할 때 실제 설정 파일 대신 임시 폴더를 쓰기 위함
-            let home = ProcessInfo.processInfo.environment["KONGPOD_HOME"].map { URL(fileURLWithPath: $0) }
+            // TASKY_HOME: 검증할 때 실제 설정 파일 대신 임시 폴더를 쓰기 위함
+            let home = ProcessInfo.processInfo.environment["TASKY_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? FileManager.default.homeDirectoryForCurrentUser
             return self == .claude ? home.appendingPathComponent(".claude/settings.json") : home.appendingPathComponent(".codex/hooks.json")
         }
@@ -229,8 +232,17 @@ enum HookInstaller {
         "\"\(Bundle.main.executablePath ?? CommandLine.arguments[0])\" --hook \(tool.rawValue)"
     }
 
+    /// 옛 이름(Kongpod) 실행 파일을 가리키는 훅도 우리 것으로 본다(이름을 바꾼 뒤 갈아 끼우려고)
     private static func isOurs(_ hook: Any) -> Bool {
-        ((hook as? [String: Any])?["command"] as? String)?.contains("Kongpod\" --hook") == true
+        guard let c = (hook as? [String: Any])?["command"] as? String else { return false }
+        return c.contains("Tasky\" --hook") || c.contains("Kongpod\" --hook")
+    }
+
+    /// 옛 실행 파일을 가리키는 훅이 남아 있는지
+    static func pointsToLegacy(_ tool: Tool) -> Bool {
+        guard let hooks = (try? read(tool))?["hooks"] as? [String: Any] else { return false }
+        return hooks.values.contains { (($0 as? [[String: Any]]) ?? []).contains { (($0["hooks"] as? [Any]) ?? []).contains {
+            (($0 as? [String: Any])?["command"] as? String)?.contains("Kongpod\" --hook") == true } } }
     }
 
     private static func read(_ tool: Tool) throws -> [String: Any] {
@@ -252,8 +264,8 @@ enum HookInstaller {
     static func preview(_ tool: Tool, install: Bool) -> String {
         let names = tool.events.map(\.0).joined(separator: ", ")
         return install
-            ? "\(tool.file.path)에 콩깍지 훅을 추가해요.\n이벤트: \(names)\n\n기존 내용은 백업해 두고, 다른 훅은 그대로 둬요. 훅은 이벤트를 펫에게 보내기만 하고 작업을 기다리게 하지 않아요."
-            : "\(tool.file.path)에서 콩깍지 훅만 빼요. 바꾸기 전에 백업해 둬요."
+            ? "\(tool.file.path)에 Tasky 훅을 추가해요.\n이벤트: \(names)\n\n기존 내용은 백업해 두고, 다른 훅은 그대로 둬요. 훅은 이벤트를 펫에게 보내기만 하고 작업을 기다리게 하지 않아요."
+            : "\(tool.file.path)에서 Tasky 훅만 빼요. 바꾸기 전에 백업해 둬요."
     }
 
     static func set(_ tool: Tool, installed: Bool) throws {
@@ -285,7 +297,7 @@ enum HookInstaller {
         if fm.fileExists(atPath: tool.file.path) {
             permissions = (try? fm.attributesOfItem(atPath: tool.file.path)[.posixPermissions] as? Int) ?? 0o600
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
-            let backup = tool.file.appendingPathExtension("kongpod-backup-\(stamp)-\(UUID().uuidString.prefix(4))")
+            let backup = tool.file.appendingPathExtension("tasky-backup-\(stamp)-\(UUID().uuidString.prefix(4))")
             try fm.copyItem(at: tool.file, to: backup)
             try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
         } else {
@@ -295,5 +307,33 @@ enum HookInstaller {
         try data.write(to: tool.file, options: .atomic)
         // 원래 권한 유지 (설정 파일에 토큰 등이 있을 수 있다)
         try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: tool.file.path)
+    }
+}
+
+/// 이름 바꾸기(콩깍지 Kongpod → Tasky) 뒤 처음 실행할 때 한 번: 설정·폴더·로그인 항목·훅을 새 이름으로 옮긴다.
+/// 옛 설정·폴더는 지우지 않는다(되돌리기 쉽게). 훅은 바꾸기 전에 백업한다.
+enum RenameMigration {
+    static func run() {
+        let d = UserDefaults.standard
+        guard !d.bool(forKey: "migratedFromKongpod") else { return }
+        if d.persistentDomain(forName: "Tasky")?.isEmpty ?? true, let old = d.persistentDomain(forName: "Kongpod") {
+            d.setPersistentDomain(old, forName: "Tasky")
+        }
+        let fm = FileManager.default
+        if ProcessInfo.processInfo.environment["TASKY_HOME"] == nil, fm.fileExists(atPath: Paths.legacySupport.path) {
+            for name in (try? fm.contentsOfDirectory(atPath: Paths.legacySupport.path)) ?? [] where name != "hook.sock" {
+                let to = Paths.support.appendingPathComponent(name)
+                if !fm.fileExists(atPath: to.path) { try? fm.copyItem(at: Paths.legacySupport.appendingPathComponent(name), to: to) }
+            }
+        }
+        let oldAgent = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/com.kongpod.pet.plist")
+        if fm.fileExists(atPath: oldAgent.path) {
+            LoginItem.set(true)
+            try? fm.removeItem(at: oldAgent)
+        }
+        for tool in [HookInstaller.Tool.claude, .codex] where HookInstaller.pointsToLegacy(tool) {
+            try? HookInstaller.set(tool, installed: true)
+        }
+        d.set(true, forKey: "migratedFromKongpod")
     }
 }

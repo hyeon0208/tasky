@@ -4,7 +4,7 @@
 
 Tasky는 macOS 바탕화면에 늘 떠 있는 펫 앱입니다. 펫을 누르면 원형 메뉴가 열리고, 폴더 열기·파일 변환·키보드 설정·잠깐 쉬기 같은 일을 펫 하나에서 할 수 있습니다. Claude Code·Codex 같은 AI 코딩 에이전트가 일을 끝내거나 내 승인을 기다리면 펫이 알려 줍니다.
 
-> 이전 이름은 **콩깍지(Kongpod)** 입니다. 코드·실행 파일·설정 저장 위치에는 아직 `Kongpod`라는 이름이 남아 있으며, Tasky로 바꾸는 작업을 진행 중입니다.
+> 이전 이름은 **콩깍지(Kongpod)** 입니다. 콩깍지 때 쓰던 설정·캐릭터 그림·로그인 항목·Claude Code/Codex 연결은 Tasky를 처음 실행할 때 자동으로 옮겨집니다(옛 설정은 지우지 않음).
 
 - 플랫폼: macOS 14 (Sonoma) 이상
 - 언어: Swift (AppKit, SwiftUI 미사용), Swift Package
@@ -19,7 +19,7 @@ Tasky는 macOS 바탕화면에 늘 떠 있는 펫 앱입니다. 펫을 누르면
 git clone https://github.com/hyeon0208/tasky.git
 cd tasky
 swift build
-.build/debug/Kongpod            # 실행
+.build/debug/Tasky            # 실행
 ```
 
 - 끄기: 메뉴 막대의 잎 아이콘 → 종료
@@ -30,12 +30,12 @@ swift build
 
 | 명령 | 하는 일 |
 |---|---|
-| `.build/debug/Kongpod` | 펫 실행 |
-| `.build/debug/Kongpod --debug` | 개발자 옵션과 함께 실행 (설정에 '개발자' 탭) |
-| `.build/debug/Kongpod --selftest` | 자체 검사 (위치 계산·작업 알림·키보드 판정 등) |
-| `.build/debug/Kongpod --convert <작업> <파일...>` | 화면 없이 파일 변환만 실행 |
-| `.build/debug/Kongpod --connect claude\|codex` | Claude Code·Codex 알림 연결 |
-| `.build/debug/Kongpod --disconnect claude\|codex` | 연결 해제 |
+| `.build/debug/Tasky` | 펫 실행 |
+| `.build/debug/Tasky --debug` | 개발자 옵션과 함께 실행 (설정에 '개발자' 탭) |
+| `.build/debug/Tasky --selftest` | 자체 검사 (위치 계산·작업 알림·키보드 판정 등) |
+| `.build/debug/Tasky --convert <작업> <파일...>` | 화면 없이 파일 변환만 실행 |
+| `.build/debug/Tasky --connect claude\|codex` | Claude Code·Codex 알림 연결 |
+| `.build/debug/Tasky --disconnect claude\|codex` | 연결 해제 |
 
 ---
 
@@ -104,7 +104,7 @@ swift build
 그림이 없으면 기본 콩깍지 모양으로 그려집니다. 캐릭터 그림은 아래 폴더에 PNG(투명 배경)로 넣으면 코드 수정 없이 설정의 캐릭터 목록에 나타납니다.
 
 ```
-~/Library/Application Support/Kongpod/Characters/<캐릭터 이름>/
+~/Library/Application Support/Tasky/Characters/<캐릭터 이름>/
   기본.png  눈감음.png  졸음.png  행복.png  놀람.png  슬픔.png  인사.png  입벌림.png
   눌림.png  대롱.png  걷기.png  걷기2.png  명상.png  화남.png  점프.png
 ```
@@ -143,7 +143,7 @@ swift build
 ### 성능 확인
 `--debug`로 실행하면 설정에 '개발자' 탭이 생깁니다.
 - CPU, 메모리, 펫이 움직인 프레임 수, 애니메이션 수, 반복해서 하는 일을 1초마다 보여 줍니다.
-- '1초마다 기록 남기기'를 켜면 `~/Library/Logs/Kongpod/perf-날짜.csv`에 저장됩니다. 성능 문제를 제보할 때 이 파일을 이슈에 붙여 주세요.
+- '1초마다 기록 남기기'를 켜면 `~/Library/Logs/Tasky/perf-날짜.csv`에 저장됩니다. 성능 문제를 제보할 때 이 파일을 이슈에 붙여 주세요.
 
 ### 작업 방식
 새 기능은 구현 전에 `intent/<기능>/`에 문서로 합의합니다: `intent.md`(무엇·왜) → `spec.md`(설계) → `plan.md`(파일·순서·검사). 자세한 내용은 [AI-NATIVE-GUIDE.md](AI-NATIVE-GUIDE.md)와 [CLAUDE.md](CLAUDE.md)를 보세요.
@@ -155,7 +155,7 @@ swift build
 - 작업 구슬: 펫 머리 위에 작업마다 구슬(일하는 중·내 차례·끝남)
 - 클립보드 기록 (⌘⇧C)
 - 창 정리 (Rectangle 방식 단축키)
-- 이름 바꾸기(Kongpod → Tasky), 앱 아이콘, `.app` 배포
+- 앱 아이콘, `.app` 배포
 
 ---
 

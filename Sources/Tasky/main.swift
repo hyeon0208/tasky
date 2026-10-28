@@ -2,10 +2,10 @@ import AppKit
 
 if CommandLine.arguments.contains("--selftest") { exit(SelfTest.run()) }
 
-// Claude Code·Codex 훅이 실행: Kongpod --hook claude|codex
+// Claude Code·Codex 훅이 실행: Tasky --hook claude|codex
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--hook" { exit(HookClient.run(tool: CommandLine.arguments[2])) }
 
-// 명령줄에서 연결·끊기: Kongpod --connect|--disconnect claude|codex
+// 명령줄에서 연결·끊기: Tasky --connect|--disconnect claude|codex
 if CommandLine.arguments.count == 3, ["--connect", "--disconnect"].contains(CommandLine.arguments[1]),
    let tool = HookInstaller.Tool(rawValue: CommandLine.arguments[2]) {
     do {
@@ -15,7 +15,7 @@ if CommandLine.arguments.count == 3, ["--connect", "--disconnect"].contains(Comm
     } catch { print("ERROR:", error.localizedDescription); exit(1) }
 }
 
-// 변환 확인용: Kongpod --convert <작업 이름> <파일...>
+// 변환 확인용: Tasky --convert <작업 이름> <파일...>
 if CommandLine.arguments.count > 3, CommandLine.arguments[1] == "--convert" {
     guard let op = ConvertOp(rawValue: CommandLine.arguments[2]) else { print("모르는 작업"); exit(2) }
     let urls = CommandLine.arguments.dropFirst(3).map { URL(fileURLWithPath: $0) }
@@ -23,6 +23,7 @@ if CommandLine.arguments.count > 3, CommandLine.arguments[1] == "--convert" {
     exit(0)
 }
 
+RenameMigration.run()   // 옛 이름(Kongpod) 설정·폴더·훅을 처음 한 번 옮긴다
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // Dock 아이콘 없이 메뉴 막대에만
 let controller = App()

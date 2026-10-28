@@ -1150,7 +1150,7 @@ final class App: NSObject {
 
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "leaf", accessibilityDescription: "콩깍지")
+        statusItem.button?.image = NSImage(systemSymbolName: "leaf", accessibilityDescription: "Tasky")
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem("새 깍지 부르기") { [weak self] in self?.addPet() })
         let sound = ClosureMenuItem("작업 알림음") {}
@@ -1166,7 +1166,7 @@ final class App: NSObject {
             self.pets.forEach { $0.setVisible(show) }
         })
         menu.addItem(.separator())
-        menu.addItem(withTitle: "콩깍지 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Tasky 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
     }
 }
@@ -1192,14 +1192,14 @@ private extension NSScreen {
 /// shortcut: 지금 실행 파일 경로를 기록하므로 .build를 지우거나 옮기면 다시 켜야 한다, .app으로 포장하면 SMAppService로 바꾼다.
 enum LoginItem {
     static let plist = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/LaunchAgents/com.kongpod.pet.plist")
+        .appendingPathComponent("Library/LaunchAgents/com.tasky.pet.plist")
 
     static var isOn: Bool { FileManager.default.fileExists(atPath: plist.path) }
 
     static func set(_ on: Bool) {
         if !on { try? FileManager.default.removeItem(at: plist); return }
         let dict: [String: Any] = [
-            "Label": "com.kongpod.pet",
+            "Label": "com.tasky.pet",
             "ProgramArguments": [Bundle.main.executablePath ?? CommandLine.arguments[0]],
             "RunAtLoad": true,
             "ProcessType": "Interactive",

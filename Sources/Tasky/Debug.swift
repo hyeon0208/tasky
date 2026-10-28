@@ -66,7 +66,7 @@ final class PerfSampler: NSObject {
         get { UserDefaults.standard.bool(forKey: "perfLogging") }
         set { UserDefaults.standard.set(newValue, forKey: "perfLogging"); shared.update() }
     }
-    static let logFolder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Kongpod")
+    static let logFolder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Tasky")
 
     func listen(_ f: @escaping (Sample) -> Void) -> UUID {
         let id = UUID()
