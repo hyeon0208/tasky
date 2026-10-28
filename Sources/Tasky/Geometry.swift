@@ -365,6 +365,26 @@ enum SelfTest {
               && ClockMode.text(noon.addingTimeInterval(-12 * 3600), hour24: false, seconds: true, calendar: cal) == "오전 12:07:09", "시계 글자(정오·자정)")
         check(ClockMode.text(noon.addingTimeInterval(3 * 3600), hour24: true, seconds: true, calendar: cal) == "15:07:09"
               && ClockMode.text(noon, hour24: true, seconds: false, calendar: cal) == "12:07", "시계 24시간제·초 끄기")
+        // F16 클립보드
+        var ch = ClipHistory(limit: 2)
+        ch.insert(ClipItem(kind: .text, text: "하나"))
+        ch.insert(ClipItem(kind: .text, text: "Two"))
+        ch.items[1].pinned = true
+        ch.insert(ClipItem(kind: .text, text: "셋"))
+        ch.insert(ClipItem(kind: .text, text: "넷"))
+        check(ch.items.map { $0.text ?? "" } == ["넷", "셋", "하나"], "개수 넘으면 오래된 것부터, 고정은 남음")
+        ch.insert(ClipItem(kind: .text, text: "셋"))
+        check(ch.items.map { $0.text ?? "" } == ["셋", "넷", "하나"], "같은 내용은 맨 위로")
+        check(ch.search("two").isEmpty && ch.search("하").first?.text == "하나" && ch.search("").first?.pinned == true, "검색·고정 먼저")
+        check(ClipHistory.isConcealed(types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"])
+              && !ClipHistory.isConcealed(types: ["public.utf8-plain-text"]), "숨김 복사 판정")
+        let clipDir = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-clip-\(UUID().uuidString)")
+        let store1 = ClipStore(folder: clipDir)
+        store1.add(ClipItem(kind: .files, files: ["/tmp/a.txt"]))
+        store1.save()
+        check(ClipStore(folder: clipDir).history.items.first?.files == ["/tmp/a.txt"], "기록 저장·읽기")
+        try? FileManager.default.removeItem(at: clipDir)
+
         // F14 작업 구슬
         let beadNow = Date()
         func ses(_ id: String, _ st: AgentSession.State, tool: String = "claude", app: String? = nil, seen: Bool = true, ago: Double = 0) -> AgentSession {

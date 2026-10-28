@@ -380,6 +380,17 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     func dismissAlert() { alertCard.dismiss() }
 
+    /// 클립보드에 새로 복사됨: 잠깐 받아 드는 반응 + 앞부분 쪽지
+    func copied(_ item: ClipItem) {
+        guard UserDefaults.standard.object(forKey: "clipReact") as? Bool ?? true else { return }
+        petView.react(.fileNear)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            if let self, self.petView.base == .fileNear { self.petView.react(self.calm) }
+        }
+        let p = item.preview
+        say("📋 " + (p.count > 20 ? String(p.prefix(20)) + "…" : p), seconds: 1.5)
+    }
+
     // MARK: 시계 말풍선 (시안 '커서 올리면 말풍선', 초 단위)
 
     private var clock: (panel: FloatingPanel, label: NSTextField, timer: Timer)?
@@ -543,6 +554,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             // 편지 쓰기·편지함은 F7(보류) 동안 뺀다
             Slot(title: "폴더 서랍", symbol: "folder") { [weak self] in self?.openDrawer(pinned: false) },
             Slot(title: "싱잉볼", symbol: "bell") { [weak self] in if let self { self.onBowl?(self) } },
+            Slot(title: "클립보드 (\(HotKey.title()))", symbol: "doc.on.clipboard") { ClipWindow.shared.open() },
             Slot(title: "작업 알림", symbol: "checklist") { [weak self] in self?.openAgentList() },
             Slot(title: dock.isDocked ? "빼꼼 그만" : "빼꼼", symbol: "eye") { [weak self] in self?.togglePeek() },
             Slot(title: "설정", symbol: "gearshape") { [weak self] in self?.openSettings() },
@@ -878,6 +890,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 [NSView(), restoreButton],
                 ]),
             ])),
+            SettingsTab(id: "clipboard", title: "클립보드", symbol: "doc.on.clipboard", content: clipboardSettings()),
         ] + (Debug.isOn ? [SettingsTab(id: "debug", title: "개발자", symbol: "hammer", content: {
                 let d = DebugTab()
                 settingsKeepAlive.append(d)
@@ -924,7 +937,85 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         settingsMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in self?.closeSettings() }
     }
 
+    /// 설정 '클립보드' 탭
+    private func clipboardSettings() -> NSView {
+        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSButton {
+            let b = ClosureButton("") {}
+            b.setButtonType(.switch)
+            b.title = ""
+            b.state = on ? .on : .off
+            b.handler = { [weak b] in toggle(b?.state == .on) }
+            return b
+        }
+        func note(_ t: String) -> NSTextField {
+            let f = NSTextField(wrappingLabelWithString: t)
+            f.font = .systemFont(ofSize: 11)
+            f.textColor = .secondaryLabelColor
+            f.preferredMaxLayoutWidth = 320
+            return f
+        }
+        let status = note("")
+        func refresh() {
+            status.stringValue = !ClipWatcher.enabled ? "꺼져 있어요"
+                : HotKey.shared.registered ? "\(HotKey.title())로 기록 창을 열어요. 크롬 개발자 도구·Finder의 같은 단축키는 가려져요."
+                : "\(HotKey.title())는 다른 앱이 쓰고 있어요. 다른 키를 골라 주세요."
+        }
+        refresh()
+        let record = ClosureButton(HotKey.title()) {}
+        record.handler = { [weak self, weak record] in
+            self?.stopKeyRecorder()   // 두 번 눌러도 듣는 것은 하나
+            record?.title = "키를 누르세요…"
+            self?.keyRecorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+                self?.stopKeyRecorder()
+                let mods = HotKey.carbonModifiers(e.modifierFlags)
+                // Esc는 취소. ⌘·⌃·⌥ 중 하나는 있어야 한다(⇧만이면 대문자 입력을 빼앗음)
+                if e.keyCode != 53, !e.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+                    HotKey.keyCode = UInt32(e.keyCode)
+                    HotKey.modifiers = mods
+                    HotKey.shared.register()
+                }
+                record?.title = HotKey.title()
+                refresh()
+                return nil
+            }
+        }
+        let limit = NSPopUpButton()
+        let counts = [10, 20, 50, 100, 200]
+        limit.addItems(withTitles: counts.map { "\($0)개" })
+        limit.selectItem(at: counts.firstIndex(of: ClipStore.limit) ?? 2)
+        let limitHandler = ClosureButton("") {}
+        limitHandler.handler = { [weak limit] in if let i = limit?.indexOfSelectedItem { ClipStore.limit = counts[i] } }
+        limit.target = limitHandler
+        limit.action = #selector(ClosureButton.performClick(_:))
+        settingsKeepAlive.append(limitHandler)
+        let clear = ClosureButton("고정 빼고 지우기") { ClipStore.shared.update { $0.items.removeAll { !$0.pinned } } }
+        let clearAll = ClosureButton("모두 지우기") { ClipStore.shared.update { $0.items.removeAll() } }
+        let clearRow = NSStackView(views: [clear, clearAll])
+        func label(_ t: String) -> NSTextField { NSTextField(labelWithString: t) }
+        return SettingsTabs.grid([(nil, [
+            [label("클립보드 기록"), check(ClipWatcher.enabled) { on in
+                ClipWatcher.enabled = on
+                if on { HotKey.shared.register() } else { HotKey.shared.unregister() }
+                refresh()
+            }],
+            [label("기록 창 단축키"), record],
+            [NSView(), status],
+            [label("기록 개수"), limit],
+            [label("복사할 때 펫 반응"), check(UserDefaults.standard.object(forKey: "clipReact") as? Bool ?? true) {
+                UserDefaults.standard.set($0, forKey: "clipReact") }],
+            [label("기록 지우기"), clearRow],
+            [NSView(), note("비밀번호 관리자가 숨김 표시한 복사는 기록하지 않아요. 기록은 이 Mac에만 저장돼요.")],
+        ])])
+    }
+
+    private var keyRecorder: Any?
+    private func stopKeyRecorder() {
+        if let m = keyRecorder { NSEvent.removeMonitor(m) }
+        keyRecorder = nil
+    }
+
     private func closeSettings() {
+        stopKeyRecorder()
         if let m = settingsMonitor { NSEvent.removeMonitor(m); settingsMonitor = nil }
         settingsPanel?.orderOut(nil)
         settingsPanel = nil
@@ -1112,6 +1203,11 @@ final class App: NSObject {
         KeySwitcher.shared.apply()
         KeySwitcher.cleanUpOnSignals()
         PerfSampler.shared.windows = { [weak self] in self?.pets.map(\.petWindow) ?? [] }
+        // F16 클립보드: 감시·단축키, 복사하면 보이는 첫 펫이 받아 든다
+        ClipWatcher.shared.onCopy = { [weak self] item in self?.pets.first { $0.isVisible }?.copied(item) }
+        ClipWatcher.shared.apply()
+        HotKey.shared.onPress = { ClipWindow.shared.toggle() }
+        HotKey.shared.register()
         PerfSampler.shared.update()   // --debug이고 기록이 켜져 있으면 바로 기록 시작
         for e in HookServer.drainSpool() { agents.apply(e, offline: true) }
         server = HookServer { [weak self] e in self?.agents.apply(e) }
@@ -1215,7 +1311,15 @@ final class App: NSObject {
 
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "leaf", accessibilityDescription: "Tasky")
+        // 앱 아이콘의 곰 윤곽(흑백 템플릿, 다크 모드에서 자동 반전). 없으면 체크 기호.
+        // Bundle.module은 묶음을 못 찾으면 앱을 멈추므로 직접 찾는다(.build 밖으로 옮겨도 안전)
+        let res = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0?.appendingPathComponent("Tasky_Tasky.bundle") }
+            .compactMap(Bundle.init(url:)).first
+        let logo = res?.image(forResource: "MenuBarIcon") ?? NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
+        logo?.isTemplate = true
+        logo?.size = NSSize(width: 18, height: 18)
+        logo?.accessibilityDescription = "Tasky"
+        statusItem.button?.image = logo
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem("새 깍지 부르기") { [weak self] in self?.addPet() })
         let sound = ClosureMenuItem("작업 알림음") {}

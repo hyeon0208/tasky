@@ -5,6 +5,6 @@ let package = Package(
     name: "Tasky",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Tasky", path: "Sources/Tasky")
+        .executableTarget(name: "Tasky", path: "Sources/Tasky", resources: [.process("Resources")])
     ]
 )
