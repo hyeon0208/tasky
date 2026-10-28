@@ -316,8 +316,11 @@ enum RenameMigration {
     static func run() {
         let d = UserDefaults.standard
         guard !d.bool(forKey: "migratedFromKongpod") else { return }
-        if d.persistentDomain(forName: "Tasky")?.isEmpty ?? true, let old = d.persistentDomain(forName: "Kongpod") {
-            d.setPersistentDomain(old, forName: "Tasky")
+        // 키마다 없는 것만 옮긴다(Tasky에 이미 값이 있어도 나머지는 옮겨지게)
+        if let old = d.persistentDomain(forName: "Kongpod") {
+            var now = d.persistentDomain(forName: "Tasky") ?? [:]
+            for (k, v) in old where now[k] == nil { now[k] = v }
+            d.setPersistentDomain(now, forName: "Tasky")
         }
         let fm = FileManager.default
         if ProcessInfo.processInfo.environment["TASKY_HOME"] == nil, fm.fileExists(atPath: Paths.legacySupport.path) {

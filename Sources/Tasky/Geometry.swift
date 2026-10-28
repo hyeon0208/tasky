@@ -365,6 +365,22 @@ enum SelfTest {
               && ClockMode.text(noon.addingTimeInterval(-12 * 3600), hour24: false, seconds: true, calendar: cal) == "오전 12:07:09", "시계 글자(정오·자정)")
         check(ClockMode.text(noon.addingTimeInterval(3 * 3600), hour24: true, seconds: true, calendar: cal) == "15:07:09"
               && ClockMode.text(noon, hour24: true, seconds: false, calendar: cal) == "12:07", "시계 24시간제·초 끄기")
+        // F14 작업 구슬
+        let beadNow = Date()
+        func ses(_ id: String, _ st: AgentSession.State, tool: String = "claude", app: String? = nil, seen: Bool = true, ago: Double = 0) -> AgentSession {
+            var x = AgentSession(id: id, tool: tool, cwd: "/tmp/\(id)", state: st, updated: beadNow.addingTimeInterval(-ago), summary: nil, app: app)
+            x.seen = seen
+            return x
+        }
+        let mix = [ses("a", .working), ses("b", .working, ago: 5), ses("c", .waiting), ses("d", .done, seen: false), ses("e", .done)]
+        check(BeadModel.beads(sessions: mix, converting: 0, frontApp: nil, accepts: { _ in true }).count == 4, "본 끝남은 구슬에서 빠짐")
+        let front = BeadModel.beads(sessions: [ses("a", .working, app: "term", ago: 10), ses("b", .working, app: "term"), ses("c", .waiting)],
+                                    converting: 0, frontApp: "term", accepts: { _ in true })
+        check(front.filter(\.big).count == 1 && front.first { $0.big }?.title.hasPrefix("b") == true, "앞 앱의 가장 최근 세션만 큰 구슬")
+        let six = BeadModel.beads(sessions: (0..<6).map { ses("s\($0)", .working) }, converting: 0, frontApp: nil, accepts: { _ in true })
+        check(six.count == 4 && six.last?.kind == .more(3), "6개면 3개 + \"+3\"")
+        check(BeadModel.beads(sessions: [ses("x", .working, tool: "codex")], converting: 1, frontApp: nil, accepts: { $0 == "claude" }).map(\.tag) == ["⇄"],
+              "받지 않는 도구는 빠지고 변환은 남음")
         // F17
         let t1 = Ticker.every("검사", 100) { _ in }, t2 = Ticker.every("검사", 100) { _ in }
         check(Ticker.live.first { $0.name == "검사 (100초마다)" }?.count == 2, "타이머 2개 셈")

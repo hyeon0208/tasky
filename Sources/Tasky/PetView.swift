@@ -38,6 +38,16 @@ protocol PetViewDelegate: AnyObject {
 final class PetView: NSView {
     weak var delegate: PetViewDelegate?
     var mirrored = false { didSet { needsDisplay = true } }
+
+
+    /// 내 차례 구슬 쪽으로 몸을 살짝 기울인다(-1 왼쪽 … 1 오른쪽, 0 똑바로). 동작 줄이기면 기울이지 않는다.
+    func lean(_ toward: CGFloat) {
+        let angle = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : -toward * 6 * .pi / 180
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.3)
+        bodyLayer.setValue(angle, forKeyPath: "transform.rotation.z")
+        CATransaction.commit()
+    }
     /// 싱잉볼 쉼(F6): 호흡 애니메이션과 몸에 겹쳐 그린 작은 그릇
     var breathing = false { didSet { if breathing != oldValue { updateBreathing() } } }
     var holdingBowl = false { didSet { needsDisplay = true } }

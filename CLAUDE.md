@@ -18,6 +18,7 @@ macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없�
 - `RingView.swift`: 원형 메뉴, `Drawer.swift`: 폴더 서랍(NSBrowser 칼럼), `Converter.swift`: 드롭 변환
 - `Character.swift`: 캐릭터 그림(영어·한국어 이름, 대신 규칙), 효과, 상황 → 반응 표, 찌르기·던지기 판정 (F11)
 - `Keyboard.swift`: 한영 전환 키(판정·hidutil Caps→F18·듣기 전용 탭·입력 소스)와 키 반복 값 (F12)
+- `Beads.swift`: 작업 구슬(세션·변환 → 구슬 목록, 펫 위 자식 패널) (F14)
 - `Debug.swift`: `--debug` 개발자 옵션, 이름 붙은 타이머 `Ticker`(새 타이머는 이것으로 만든다), `PerfSampler` (F17)
 - `Agents.swift`: 훅 클라이언트·소켓 서버·세션 상태·훅 설치, `AgentPanel.swift`: 알림 목록·메시지 창
 

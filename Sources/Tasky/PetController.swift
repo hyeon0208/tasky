@@ -68,6 +68,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var screenID: Int?
     private var hoverWork: DispatchWorkItem?
     private var lastResults: [URL] = []
+    /// 지금 진행 중인 변환 수(작업 구슬용)
+    private var convertingCount = 0 { didSet { updateBeads() } }
 
     /// `index`는 몇 번째 펫인지. 색과, 처음 놓일 자리를 조금씩 비키는 데 쓴다.
     init(id: String, index: Int, onAdd: @escaping () -> Void, onRemove: @escaping (PetController) -> Void) {
@@ -100,7 +102,13 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         pet.orderFrontRegardless()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in self?.place(animated: true) }
-        NotificationCenter.default.addObserver(forName: ClockMode.changed, object: nil, queue: .main) { [weak self] _ in self?.updateClock() }
+        NotificationCenter.default.addObserver(forName: ClockMode.changed, object: nil, queue: .main) { [weak self] _ in
+            self?.updateClock()
+            self?.agentsChanged(nil, announce: false)   // 구슬 켜기·끄기도 같은 알림
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) {
+            [weak self] _ in self?.updateBeads()   // 맨 앞 앱이 바뀌면 큰 구슬이 바뀐다
+        }
         DispatchQueue.main.async { [weak self] in self?.updateClock() }
         lifeTimers = [
             Ticker.every("졸 시간인지 보기", 30) { [weak self] _ in
@@ -113,6 +121,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     /// 펫을 화면에서 치우고 저장한 위치를 지운다.
     func dismiss() {
         hideClock()
+        beadsPanel?.orderOut(nil)
+        beadsPanel = nil
         briefingWindow?.close()
         closeRing()
         closeDrawer()
@@ -128,7 +138,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     func setVisible(_ visible: Bool) {
         if !visible { briefingWindow?.close() }
-        defer { updateClock() }
+        defer { updateClock(); updateBeads() }
         closeRing()
         closeDrawer()
         if !visible { closeSettings() }
@@ -152,7 +162,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         } else {
             pet.setFrame(f, display: true)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.25 : 0)) { [weak self] in self?.placeClock() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.25 : 0)) { [weak self] in self?.placeClock(); self?.placeBeads() }
     }
 
     func petDragged(by delta: CGVector) {
@@ -320,7 +330,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     /// 몸 안 콩알은 이 펫이 받는 도구의 작업만 보여준다. 말풍선·알림음은 `announce`일 때만.
     func agentsChanged(_ s: AgentSession?, announce: Bool) {
         guard let agents else { return }
-        petView.beans = agents.ordered.filter { accepts($0.tool) }.prefix(5).map { $0.state.color }
+        petView.beans = BeadsSetting.on ? [] : agents.ordered.filter { accepts($0.tool) }.prefix(5).map { $0.state.color }
+        updateBeads()
         agentList?.reload()
         guard announce, let s, pet.isVisible, s.state != .working else { return }
         petView.react(s.state == .waiting ? .jobWaiting : s.state == .failed ? .jobFailed : .jobDone)
@@ -380,6 +391,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         if clock == nil { showClock() }
         clock?.label.stringValue = ClockMode.text(Date())   // 설정을 바꾸면 바로 반영
         placeClock()
+        placeBeads()   // 시계가 생기거나 없어지면 구슬 자리도 바뀐다
     }
 
     private func showClock() {
@@ -403,6 +415,54 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         clock = (panel, label, timer)
     }
 
+    // MARK: 작업 구슬 (F14)
+
+    private var beadsPanel: FloatingPanel?
+    private var beadsView: BeadsView?
+
+    private func hideBeads() {
+        beadsPanel?.orderOut(nil)
+        beadsPanel = nil
+        beadsView = nil
+        petView.lean(0)
+    }
+
+    private func updateBeads() {
+        guard BeadsSetting.on, pet.isVisible, let agents else { hideBeads(); return }
+        let beads = BeadModel.beads(sessions: agents.ordered, converting: convertingCount,
+                                    frontApp: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, accepts: accepts)
+        if beads.isEmpty { hideBeads(); return }
+        if beadsPanel == nil {
+            let size = CGSize(width: 280, height: BeadsView.labelHeight + BeadsView.big + 12)
+            let panel = FloatingPanel(size: size)
+            let view = BeadsView(frame: CGRect(origin: .zero, size: size))
+            view.onClick = { [weak self] in self?.openAgentList() }
+            panel.contentView = view
+            panel.orderFrontRegardless()
+            follow(panel)
+            beadsPanel = panel
+            beadsView = view
+        }
+        beadsView?.beads = beads
+        placeBeads()
+        // 내 차례 구슬이 옆에 있으면 그쪽으로 기운다(큰 구슬이 기다리면 똑바로 위를 본다)
+        if let view = beadsView, let panel = beadsPanel, let x = view.waitingX, !(beads.first { $0.kind == .waiting }?.big ?? false) {
+            petView.lean(panel.frame.minX + x < bodyFrame.midX ? -1 : 1)   // 화면 가장자리에서 패널이 밀려도 몸 가운데 기준
+        } else {
+            petView.lean(0)
+        }
+    }
+
+    private func placeBeads() {
+        guard let panel = beadsPanel else { return }
+        let v = screen.visibleFrame, body = bodyFrame
+        let shown = body.intersection(v).isNull ? body : body.intersection(v)
+        let top = clock?.panel.frame.maxY ?? shown.maxY + 2
+        let size = panel.frame.size
+        panel.setFrameOrigin(CGPoint(x: min(max(shown.midX - size.width / 2, v.minX), v.maxX - size.width),
+                                     y: min(top - BeadsView.labelHeight + 2, v.maxY - size.height)))
+    }
+
     private func placeClock() {
         guard let clock else { return }
         let body = bodyFrame, size = clock.panel.frame.size
@@ -416,6 +476,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         guard let clock else { return }
         clock.timer.invalidate()
         clock.panel.orderOut(nil)
+        defer { placeBeads() }   // 시계 자리가 비면 구슬이 내려온다
         self.clock = nil
     }
 
@@ -448,7 +509,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         follow(panel)
         agentList = list
         agents.markSeen()
-        petView.beans = agents.ordered.filter { accepts($0.tool) }.prefix(5).map { $0.state.color }
+        petView.beans = BeadsSetting.on ? [] : agents.ordered.filter { accepts($0.tool) }.prefix(5).map { $0.state.color }
+        updateBeads()
         agentClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in self?.closeAgentList() }
     }
 
@@ -591,8 +653,10 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
         say("\(op.title) 바꾸는 중… (\(urls.count)개)")
         petView.react(.converting)
+        convertingCount += 1
         Converter.run(op, urls) { [weak self] outputs, errors in
             guard let self else { return }
+            self.convertingCount -= 1
             if self.petView.base == .converting { self.petView.react(self.calm) }
             if !outputs.isEmpty {
                 self.lastResults = outputs
@@ -779,6 +843,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 [label("시계 말풍선"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
                     ClockMode.current = ClockMode.allCases[$0] }],
                 [label("24시간제"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],
+                [label("작업 구슬 보이기"), check(BeadsSetting.on) { BeadsSetting.on = $0 }],
                 [label("초 보이기"), check(ClockMode.showSeconds) { ClockMode.showSeconds = $0 }],
             ])])),
             SettingsTab(id: "pet", title: "깍지", symbol: "leaf", content: SettingsTabs.grid([("이 깍지만", [
