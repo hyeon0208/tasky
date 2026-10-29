@@ -655,9 +655,18 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let v = screen.visibleFrame
         let body = bodyFrame
         let center = Geometry.visibleCenter(of: body, in: v)
-        let bodySize = petView.island == nil ? max(body.width, body.height) : 80   // 알약은 펼쳐져도 링 크기 그대로
-        let roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
-        let points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
+        var bodySize = max(body.width, body.height)
+        var roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
+        var points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
+        if petView.island != nil {   // 알약: 지금 크기(접힘·펼침)에 맞춰 칸이 알약에 가리지 않을 만큼만 벌린다
+            bodySize = 40
+            let clear = pet.frame.insetBy(dx: -34, dy: -34)
+            repeat {
+                bodySize += 10
+                roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
+                points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
+            } while points.contains(where: clear.contains) && bodySize < 600
+        }
         let pad: CGFloat = 70
         let xs = points.map(\.x) + [center.x], ys = points.map(\.y) + [center.y, body.minY - 40]   // 펫 아래 이름표 자리
         let rect = CGRect(x: xs.min()! - pad, y: ys.min()! - pad,
