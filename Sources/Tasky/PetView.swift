@@ -70,8 +70,8 @@ final class PetView: NSView {
     /// 캐릭터가 그려지는 자리: 보통은 창 전체, 알약이면 작은 얼굴 칸
     private var iconRect: CGRect {
         guard let i = island else { return bounds }
-        if i.vertical && !i.expanded { return CGRect(x: (bounds.width - 36) / 2, y: bounds.height - 40, width: 36, height: 36) }
-        let s: CGFloat = i.expanded ? (i.vertical ? 52 : 48) : 36
+        if i.vertical && !i.expanded { return CGRect(x: (bounds.width - 26) / 2, y: bounds.height - 30, width: 26, height: 26) }
+        let s: CGFloat = i.expanded ? (i.vertical ? 52 : 48) : 26
         return CGRect(x: max(4, min(8, (bounds.height - s) / 2)), y: bounds.midY - s / 2, width: s, height: s)
     }
 
@@ -268,7 +268,7 @@ final class PetView: NSView {
                 .draw(in: CGRect(x: x, y: bounds.midY - 17, width: w, height: 15))
             return
         }
-        let d: CGFloat = 7, step: CGFloat = 12
+        let d: CGFloat = 6, step: CGFloat = 10
         func spot(_ k: Int) -> CGPoint {
             i.vertical ? CGPoint(x: bounds.midX, y: icon.minY - 10 - CGFloat(k) * step)
                        : CGPoint(x: icon.maxX + 10 + CGFloat(k) * step, y: bounds.midY)

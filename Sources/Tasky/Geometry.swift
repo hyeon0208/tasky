@@ -1,8 +1,8 @@
 import AppKit
 
-/// 펫이 화면 어디에 붙어 있는지. 위쪽 가장자리는 메뉴 막대와 겹쳐서 붙지 않는다.
+/// 펫이 화면 어디에 붙어 있는지. 위쪽은 메뉴 막대 바로 아래(F20).
 enum Dock: String {
-    case free, left, right, bottom, bottomLeft, bottomRight
+    case free, left, right, bottom, bottomLeft, bottomRight, top
 
     var isDocked: Bool { self != .free }
     /// 눈이 화면 안쪽을 보도록 그림을 뒤집어야 하는지
@@ -16,6 +16,7 @@ enum Geometry {
         let nearL = frame.minX <= v.minX + snap
         let nearR = frame.maxX >= v.maxX - snap
         let nearB = frame.minY <= v.minY + snap
+        if frame.maxY >= v.maxY - snap, !nearL, !nearR { return .top }   // 위 구석은 옆으로
         switch (nearL, nearR, nearB) {
         case (true, _, true): return .bottomLeft
         case (_, true, true): return .bottomRight
@@ -38,12 +39,14 @@ enum Geometry {
         let clampedX = min(max(origin.x, v.minX - bx), v.maxX - bx - bw)
         let clampedY = min(max(origin.y, v.minY - by), v.maxY - by - bh)
         let leftX = v.minX + showX - bx - bw, rightX = v.maxX - showX - bx, bottomY = v.minY + showY - by - bh
+        let topY = v.maxY - showY - by
         let x: CGFloat, y: CGFloat
         switch dock {
         case .free: (x, y) = (clampedX, clampedY)
         case .left: (x, y) = (leftX, clampedY)
         case .right: (x, y) = (rightX, clampedY)
         case .bottom: (x, y) = (clampedX, bottomY)
+        case .top: (x, y) = (clampedX, topY)
         case .bottomLeft: (x, y) = (leftX, bottomY)
         case .bottomRight: (x, y) = (rightX, bottomY)
         }
@@ -52,10 +55,10 @@ enum Geometry {
 
     /// F20 빼꼼 아일랜드: 붙은 펫 창이 되는 알약. 옆·구석은 세로, 아래는 가로.
     static func islandSize(dock: Dock, expanded: Bool) -> CGSize {
-        switch (dock == .bottom, expanded) {
-        case (true, false): CGSize(width: 104, height: 44)
+        switch (dock == .bottom || dock == .top, expanded) {
+        case (true, false): CGSize(width: 96, height: 30)
         case (true, true): CGSize(width: 240, height: 64)
-        case (false, false): CGSize(width: 44, height: 104)
+        case (false, false): CGSize(width: 30, height: 96)
         case (false, true): CGSize(width: 210, height: 112)
         }
     }
@@ -72,6 +75,7 @@ enum Geometry {
         case .left: CGPoint(x: left, y: clampY)
         case .right: CGPoint(x: right, y: clampY)
         case .bottom: CGPoint(x: clampX, y: v.minY + inset)
+        case .top: CGPoint(x: clampX, y: v.maxY - inset - s.height)
         case .bottomLeft: CGPoint(x: left, y: low)
         case .bottomRight: CGPoint(x: right, y: low)
         case .free: CGPoint(x: clampX, y: clampY)
@@ -104,6 +108,7 @@ enum Geometry {
         case .left: 0
         case .right: 180
         case .bottom: 90
+        case .top: 270
         case .bottomLeft: 45
         default: 135
         }
@@ -119,7 +124,7 @@ enum Geometry {
                 n == 1 ? base : base - span / 2 + span * Double(j) / Double(n - 1)
             }
             if sin(angles.first! * .pi / 180) < sin(angles.last! * .pi / 180) { angles.reverse() }
-            if dock == .bottom, cos(angles.first! * .pi / 180) > cos(angles.last! * .pi / 180) { angles.reverse() }
+            if dock == .bottom || dock == .top, cos(angles.first! * .pi / 180) > cos(angles.last! * .pi / 180) { angles.reverse() }
             result += angles.map { a in
                 let r = a * .pi / 180
                 return CGPoint(x: c.x + radius * cos(r), y: c.y + radius * sin(r))
@@ -148,7 +153,7 @@ enum SelfTest {
         check(Geometry.dock(for: CGRect(x: 1330, y: 5, width: 120, height: 84), in: v) == .bottomRight, "오른쪽 아래 구석")
         check(Geometry.dock(for: CGRect(x: 5, y: 400, width: 120, height: 84), in: v) == .left, "왼쪽 가장자리")
         check(Geometry.dock(for: CGRect(x: 600, y: 400, width: 120, height: 84), in: v) == .free, "화면 가운데")
-        check(Geometry.dock(for: CGRect(x: 600, y: 800, width: 120, height: 84), in: v) == .free, "위쪽은 붙지 않음")
+        check(Geometry.dock(for: CGRect(x: 600, y: 800, width: 120, height: 84), in: v) == .top, "위쪽도 붙음(F20)")
 
         let free = Geometry.frame(size: size, origin: CGPoint(x: 2000, y: -50), dock: .free, in: v)
         check(v.contains(free), "자유 상태는 화면 안으로")
@@ -417,7 +422,11 @@ enum SelfTest {
         // F20 빼꼼 아일랜드
         do {
             let v = CGRect(x: 0, y: 0, width: 1440, height: 900), c = CGPoint(x: 30, y: 450)
-            check(Geometry.islandFrame(dock: .left, expanded: false, center: c, in: v) == CGRect(x: 4, y: 398, width: 44, height: 104), "아일랜드 왼쪽 접힘")
+            check(Geometry.islandFrame(dock: .left, expanded: false, center: c, in: v) == CGRect(x: 4, y: 402, width: 30, height: 96), "아일랜드 왼쪽 접힘")
+            let t = Geometry.islandFrame(dock: .top, expanded: true, center: CGPoint(x: 720, y: 890), in: v)
+            check(t.maxY == 896 && t.width == 240, "아일랜드 위 가로, 펼쳐도 위 끝")
+            check(Geometry.dock(for: CGRect(x: 600, y: 820, width: 120, height: 84), in: v) == .top, "위 가장자리 붙기")
+            check(Geometry.dock(for: CGRect(x: 2, y: 820, width: 120, height: 84), in: v) == .left, "왼쪽 위 구석은 왼쪽")
             let e = Geometry.islandFrame(dock: .left, expanded: true, center: c, in: v)
             check(e.minX == 4 && e.size == CGSize(width: 210, height: 112), "아일랜드 왼쪽 펼침은 같은 끝")
             let r = Geometry.islandFrame(dock: .right, expanded: true, center: CGPoint(x: 1400, y: 450), in: v)
@@ -425,11 +434,11 @@ enum SelfTest {
             let b = Geometry.islandFrame(dock: .bottom, expanded: true, center: CGPoint(x: 720, y: 10), in: v)
             check(b.minY == 4 && b.midX == 720 && b.size == CGSize(width: 240, height: 64), "아일랜드 아래 가로")
             let bl = Geometry.islandFrame(dock: .bottomLeft, expanded: false, center: .zero, in: v)
-            check(bl.minX == 4 && bl.minY == 40 && bl.height == 104, "구석은 옆 세로 알약, 아래 40pt")
+            check(bl.minX == 4 && bl.minY == 40 && bl.height == 96, "구석은 옆 세로 알약, 아래 40pt")
             let top = Geometry.islandFrame(dock: .right, expanded: true, center: CGPoint(x: 1400, y: 899), in: v)
             check(top.maxY == 896, "아일랜드 위쪽 끝 안")
             let small = CGRect(x: 0, y: 0, width: 1024, height: 640)
-            for d in [Dock.left, .right, .bottom, .bottomLeft, .bottomRight] {
+            for d in [Dock.left, .right, .bottom, .top, .bottomLeft, .bottomRight] {
                 for ex in [false, true] {
                     let f = Geometry.islandFrame(dock: d, expanded: ex, center: CGPoint(x: 2000, y: -50), in: small)
                     check(small.contains(f), "아일랜드 작은 화면 안 \(d) \(ex)")

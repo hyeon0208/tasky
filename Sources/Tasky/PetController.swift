@@ -200,7 +200,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let rank: [AgentSession.State: Int] = [.waiting: 0, .failed: 1, .done: 2, .working: 3]
         let shown = (agents?.ordered ?? []).filter { accepts($0.tool) && ($0.state != .done || !$0.seen) }
             .sorted { rank[$0.state]! < rank[$1.state]! }
-        var i = PetView.Island(vertical: dock != .bottom, expanded: expanded, dots: shown.prefix(3).map { $0.state.color },
+        var i = PetView.Island(vertical: dock != .bottom && dock != .top, expanded: expanded, dots: shown.prefix(3).map { $0.state.color },
                                extra: max(shown.count - 3, 0), clock: ClockMode.text(Date(), seconds: false), border: alertBorder)
         guard let top = shown.first else { i.line = "쉬는 중"; i.lineColor = .secondaryLabelColor; return i }
         i.lineColor = top.state.color
@@ -321,8 +321,21 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             hoverWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
         } else {
-            place(animated: true)
+            // 오른쪽·위에 붙은 알약은 펼칠 때 창이 커서 쪽으로 옮겨 가며 나갔다 들어온 신호가 잘못 올 수 있다.
+            // 잠깐 기다렸다 커서가 정말 알약 밖일 때만 접는다(안 그러면 펼침·접힘이 반복됨).
+            collapseWhenOutside()
         }
+    }
+
+    /// 커서가 알약 밖으로 나갈 때까지 0.25초마다 보고 접는다(다시 들어온 신호가 오면 취소됨)
+    private func collapseWhenOutside() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.dock.isDocked, self.ring == nil, self.drawer == nil else { return }
+            if self.pet.frame.contains(NSEvent.mouseLocation) { self.collapseWhenOutside(); return }
+            self.place(animated: true)
+        }
+        hoverWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     private func togglePeek() {
