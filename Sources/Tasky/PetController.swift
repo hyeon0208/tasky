@@ -39,6 +39,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var lastInteraction = Date()
     private var dragVelocity = CGVector.zero
     private var lastDragTime: Date?
+    private var dragOrigin: CGPoint?   // 잡았을 때 펫 위치
+    private var lastDragDelta = CGVector.zero
     private var lifeTimers: [Timer] = []
     /// 싱잉볼 쉼 중이면 반응이 끝난 뒤 쉼 자세로 돌아간다
     private var resting = false
@@ -173,20 +175,23 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             tossID += 1
             petView.react(.drag)
         }
+        if dragOrigin == nil { dragOrigin = pet.frame.origin; lastDragDelta = .zero }
+        let step = CGVector(dx: delta.dx - lastDragDelta.dx, dy: delta.dy - lastDragDelta.dy)
+        lastDragDelta = delta
         let now = Date()
         if let last = lastDragTime, now.timeIntervalSince(last) > 0 {
             let dt = now.timeIntervalSince(last)
             // 최근 움직임에 무게를 둔 속도(pt/s)
-            dragVelocity = CGVector(dx: dragVelocity.dx * 0.5 + delta.dx / dt * 0.5, dy: dragVelocity.dy * 0.5 + delta.dy / dt * 0.5)
+            dragVelocity = CGVector(dx: dragVelocity.dx * 0.5 + step.dx / dt * 0.5, dy: dragVelocity.dy * 0.5 + step.dy / dt * 0.5)
         }
         lastDragTime = now
         var f = pet.frame
-        f.origin.x += delta.dx
-        f.origin.y += delta.dy
+        f.origin = CGPoint(x: dragOrigin!.x + delta.dx, y: dragOrigin!.y + delta.dy)   // 커서가 잡은 자리에 붙어 있게
         pet.setFrame(f, display: true)
     }
 
     func petDragEnded() {
+        dragOrigin = nil
         petView.react(calm)
         let recent = lastDragTime.map { Date().timeIntervalSince($0) < 0.1 } ?? false
         let v = dragVelocity

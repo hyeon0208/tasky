@@ -26,6 +26,7 @@ final class FloatingPanel: NSPanel {
 
 protocol PetViewDelegate: AnyObject {
     func petClicked()
+    /// delta: 누른 곳부터 지금 커서까지(누적)
     func petDragged(by delta: CGVector)
     func petDragEnded()
     func petHover(_ inside: Bool)
@@ -235,8 +236,8 @@ final class PetView: NSView {
         let now = NSEvent.mouseLocation
         if !dragging, hypot(now.x - start.x, now.y - start.y) < 3 { return }
         dragging = true
+        // 잡은 곳에서 얼마나 왔는지(누적). 조각조각 더하면 창 좌표 반올림이 쌓여 커서가 캐릭터에서 멀어진다.
         delegate?.petDragged(by: CGVector(dx: now.x - start.x, dy: now.y - start.y))
-        downPoint = now
     }
 
     override func mouseUp(with event: NSEvent) {

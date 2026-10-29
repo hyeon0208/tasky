@@ -32,7 +32,9 @@ final class SettingsTabs: NSView {
         title.alignment = .center
         addSubview(title)
         bar.orientation = .horizontal
-        bar.spacing = 4
+        bar.spacing = 2
+        // 탭이 많아도 창 폭 안에 다 들어가게 버튼 폭을 나눈다
+        let buttonWidth = min(72, (Self.width - 16 - bar.spacing * CGFloat(tabs.count - 1)) / CGFloat(tabs.count))
         for (i, t) in tabs.enumerated() {
             let b = ClosureButton("") { [weak self] in self?.select(i) }
             b.isBordered = false
@@ -42,7 +44,8 @@ final class SettingsTabs: NSView {
             b.imagePosition = .imageAbove
             b.font = .systemFont(ofSize: 11)
             b.setAccessibilityRole(.radioButton)
-            b.widthAnchor.constraint(equalToConstant: 72).isActive = true
+            b.widthAnchor.constraint(equalToConstant: buttonWidth).isActive = true
+            b.lineBreakMode = .byClipping
             b.heightAnchor.constraint(equalToConstant: 48).isActive = true
             b.wantsLayer = true
             b.layer?.cornerRadius = 8
