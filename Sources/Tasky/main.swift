@@ -23,6 +23,12 @@ if CommandLine.arguments.count > 3, CommandLine.arguments[1] == "--convert" {
     exit(0)
 }
 
+// 3D 곰 모습 확인: Tasky --render-bear <폴더>
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--render-bear" {
+    Pet3DView.renderSamples(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+    exit(0)
+}
+
 RenameMigration.run()   // 옛 이름(Kongpod) 설정·폴더·훅을 처음 한 번 옮긴다
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // Dock 아이콘 없이 메뉴 막대에만

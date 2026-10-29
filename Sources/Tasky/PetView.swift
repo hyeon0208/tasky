@@ -38,11 +38,23 @@ protocol PetViewDelegate: AnyObject {
 /// 2D 깍지. 그리기만 맡고, 상태 판단은 AppController가 한다(나중에 3D로 바꿀 때 이 파일만 교체).
 final class PetView: NSView {
     weak var delegate: PetViewDelegate?
+    /// F18: 3D 곰을 쓰면 그 위에 그리고, 상황·기울기를 넘긴다(마우스·상황 판단은 그대로 여기서)
+    var bear: Pet3DView? {
+        didSet {
+            oldValue?.removeFromSuperview()
+            if let bear { bear.frame = bounds; bear.autoresizingMask = [.width, .height]; addSubview(bear) }
+            effectLayer.zPosition = 10   // 효과(음표·Zz)가 3D 곰 위에 보이게
+            show()
+        }
+    }
+    /// 정사각 창(캐릭터 그림·3D)인지, 120×84 콩깍지인지
+    var isSquare: Bool { bear != nil || character?.resolve(.idle) != nil }
     var mirrored = false { didSet { needsDisplay = true } }
 
 
     /// 내 차례 구슬 쪽으로 몸을 살짝 기울인다(-1 왼쪽 … 1 오른쪽, 0 똑바로). 동작 줄이기면 기울이지 않는다.
     func lean(_ toward: CGFloat) {
+        bear?.lean = Double(toward)
         let angle = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : -toward * 6 * .pi / 180
         CATransaction.begin()
         CATransaction.setAnimationDuration(0.3)
@@ -149,7 +161,7 @@ final class PetView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard faceLayer.contents == nil else { return }   // 캐릭터 그림이 있으면 콩깍지를 그리지 않는다
+        guard faceLayer.contents == nil, bear == nil else { return }   // 캐릭터 그림·3D면 콩깍지를 그리지 않는다
         let ctx = NSGraphicsContext.current!.cgContext
         if mirrored { ctx.translateBy(x: bounds.width, y: 0); ctx.scaleBy(x: -1, y: 1) }
         // 기준 크기(120×84)로 그리고 펫 크기에 맞춰 늘린다
@@ -313,7 +325,7 @@ extension PetView {
     /// 상황에 맞는 표정·움직임·효과. 캐릭터 그림이 없으면 지금의 콩깍지 반응을 한다.
     func react(_ s: Situation) {
         let r = Reaction.of(s)
-        guard character?.resolve(r.pose) != nil else {
+        guard bear != nil || character?.resolve(r.pose) != nil else {
             switch s {
             case .briefing: waveHand()
             case .pet, .converted, .jobDone, .jobWaiting, .jobFailed: wiggle()
@@ -339,13 +351,14 @@ extension PetView {
 
     /// 창 안에서 몸이 차지하는 부분(0...1). 캐릭터는 그림을 바닥선만큼 내려 그린 만큼 옮긴다.
     var bodyUnit: CGRect {
+        if bear != nil { return Pet3DView.bodyUnit }
         guard let character, character.resolve(.idle) != nil else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
         let b = character.bodyRect.offsetBy(dx: 0, dy: -Self.floor)
         return b.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
     /// 지금 캐릭터 그림을 보여 주고 있는지(아니면 콩깍지)
-    var showsCharacter: Bool { faceLayer.contents != nil }
+    var showsCharacter: Bool { bear != nil || faceLayer.contents != nil }
 
     /// 표정은 그대로 두고 효과만 잠깐(싱잉볼을 칠 때 음표)
     func flash(_ effect: Effect) {
@@ -357,7 +370,7 @@ extension PetView {
         let shown = effectLayer.contents as AnyObject?
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             guard let self, (self.effectLayer.contents as AnyObject?) === shown else { return }
-            self.effectLayer.contents = self.character.flatMap { _ in Reaction.of(self.transient ?? self.base).effect?.image }
+            self.effectLayer.contents = self.showsCharacter ? Reaction.of(self.transient ?? self.base).effect?.image : nil
         }
     }
 
@@ -370,6 +383,14 @@ extension PetView {
 
     private func show() {
         let s = transient ?? base
+        if let bear {
+            bear.situation = s
+            bear.facingRight = walkingRight
+            faceLayer.contents = nil
+            effectLayer.contents = Reaction.of(s).effect?.image
+            needsDisplay = true
+            return
+        }
         let r = Reaction.of(s)
         setFace(r.pose)
         CATransaction.begin()

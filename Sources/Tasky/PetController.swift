@@ -10,7 +10,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         set { UserDefaults.standard.set(Double(newValue), forKey: key("scale")); place(animated: false) }
     }
     /// 캐릭터는 정사각 창, 콩깍지는 120×84
-    private var petSize: CGSize { CGSize(width: 120 * scale, height: (petView.character?.resolve(.idle) == nil ? 84 : 120) * scale) }
+    private var petSize: CGSize { CGSize(width: 120 * scale, height: (petView.isSquare ? 120 : 84) * scale) }
     /// 콩깍지 몸 색. 펫 순서에 따라 민트·살구·라일락·크림(예전에 고른 색이 있으면 그 색). 색 고르기는 F11에서 숨김.
     private var bodyColor: NSColor {
         guard let c = UserDefaults.standard.array(forKey: key("rgb")) as? [Double], c.count == 3 else {
@@ -18,14 +18,19 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         }
         return NSColor(srgbRed: c[0], green: c[1], blue: c[2], alpha: 1)
     }
-    /// 캐릭터 폴더 이름, "pod"는 콩깍지. 고른 적이 없으면 그림이 있는 첫 캐릭터.
+    /// 캐릭터 폴더 이름, "pod"는 콩깍지, "bear3d"는 3D 곰(기본, F18).
     private var characterName: String {
-        get { UserDefaults.standard.string(forKey: key("character")) ?? Character.available().first ?? "pod" }
+        get { UserDefaults.standard.string(forKey: key("character")) ?? "bear3d" }
         set {
             UserDefaults.standard.set(newValue, forKey: key("character"))
-            petView.character = Character(name: newValue)
+            applyCharacter()
             place(animated: false)
         }
+    }
+    private func applyCharacter() {
+        let name = characterName
+        petView.character = name == "bear3d" ? nil : Character(name: name)
+        if name == "bear3d" { if petView.bear == nil { petView.bear = Pet3DView(frame: petView.bounds) } } else { petView.bear = nil }
     }
     /// 다른 펫들(펫끼리 반응용)
     var neighbors: () -> [PetController] = { [] }
@@ -84,7 +89,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         pet.contentView = petView
         petView.delegate = self
         petView.bodyColor = bodyColor
-        petView.character = Character(name: characterName)
+        applyCharacter()
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem("새 펫 부르기", onAdd))
         menu.addItem(ClosureMenuItem("이 펫 보내기") { [weak self] in self.map(onRemove) })
@@ -764,8 +769,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         glassRow.spacing = 6
 
         // 캐릭터: 콩깍지 + 그림이 있는 캐릭터
-        let chars = ["pod"] + Character.available()
-        let charPopup = popup(chars.map { $0 == "pod" ? "콩깍지" : Character.names[$0] ?? $0 },
+        let chars = ["bear3d", "pod"] + Character.available().filter { $0 != "bear3d" }
+        let charPopup = popup(chars.map { $0 == "bear3d" ? "곰 3D (기본)" : $0 == "pod" ? "콩깍지" : Character.names[$0] ?? $0 },
                               selected: chars.firstIndex(of: characterName) ?? 0) { [weak self] in self?.characterName = chars[$0] }
 
         func hint(_ text: String) -> NSTextField {

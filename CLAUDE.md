@@ -12,6 +12,7 @@ macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없�
 
 ## 구조
 - `PetController.swift`: 펫 한 마리(위치·빼꼼·링·서랍·알림·설정 창), `App`(펫 목록·메뉴 막대·훅 서버), `LoginItem`
+- `Pet3D.swift`: 3D 곰(F18) — 스프링·상황별 자세(`BearMotion`)·도형 곰·`Pet3DView`(SceneKit). 모습 확인은 `Tasky --render-bear <폴더>`
 - `PetView.swift`: 2D 그리기만(나중에 3D로 교체할 자리). `FloatingPanel`: 포커스를 뺏지 않는 투명 패널
 - `Geometry.swift`: 빼꼼·링 칸 위치 계산 + `SelfTest`
 - `SettingsView.swift`: 설정 창(왼쪽 목록 + 카드, F19)·키보드 바로 테스트 칸 (F13)

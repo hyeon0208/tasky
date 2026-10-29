@@ -385,6 +385,19 @@ enum SelfTest {
         check(ClipStore(folder: clipDir).history.items.first?.files == ["/tmp/a.txt"], "기록 저장·읽기")
         try? FileManager.default.removeItem(at: clipDir)
 
+        // F18 3D 곰: 스프링·모션
+        var sp = Spring(stiffness: 120, damping: 14)
+        var peak = 0.0
+        for _ in 0..<240 { sp.step(to: 1, dt: 1.0 / 60); peak = max(peak, sp.value) }
+        check(abs(sp.value - 1) < 0.01 && peak > 1 && peak < 1.3, "3D 스프링이 넘쳤다가 목표로 돌아옴 \(peak)")
+        var stiff = Spring(); stiff.step(to: 1, dt: 0.1)
+        check(stiff.value.isFinite && abs(stiff.value) < 2, "3D 스프링 큰 dt에도 안정")
+        let far = BearMotion.pose(.idle, t: 1, look: CGPoint(x: 1, y: 0), lean: 0, facingRight: false, reduce: false)
+        check(abs(far.headYaw - BearPose.headYawLimit) < 1e-9, "3D 고개는 커서 쪽 최대 25°")
+        check(BearMotion.pose(.drag, t: 0.3, look: .zero, lean: 0, facingRight: false, reduce: true).bodyTilt == 0
+              && BearMotion.pose(.drag, t: 0.3, look: .zero, lean: 0, facingRight: false, reduce: false).bodyTilt != 0, "3D 동작 줄이기면 대롱대롱 없음")
+        check(BearMotion.pose(.sleepy, t: 1, look: .zero, lean: 0, facingRight: false, reduce: false).eyes < 0.2, "3D 졸면 눈 감음")
+
         // F15 창 정리: 영역 계산·순환·가장자리·좌표
         let area = CGRect(x: 0, y: 0, width: 1440, height: 900)
         let win = CGRect(x: 100, y: 100, width: 500, height: 400)
