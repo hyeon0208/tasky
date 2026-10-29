@@ -218,6 +218,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     private var time = 0.0, last: TimeInterval?, started = 0.0
     private var nextBlink = 3.0
     private var springs: [String: Spring] = [:]
+    private var fps = 60, lastLook = CGPoint.zero, calmSince = 0.0
     /// 그리는 스레드에서 창을 건드리지 않도록 메인에서 옮길 때마다 적어 둔다
     private var windowFrame = CGRect.zero
     @objc private func moved() { let f = window?.frame ?? .zero; lock.withLock { windowFrame = f } }
@@ -258,8 +259,8 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         backgroundColor = .clear
         wantsLayer = true
         layer?.isOpaque = false
-        antialiasingMode = .multisampling4X
-        preferredFramesPerSecond = 60   // 30이면 움직임이 끊겨 보인다(사용자 확인). 졸 때만 30
+        antialiasingMode = .multisampling2X   // 레티나라 2배면 충분, CPU·GPU 절약
+        preferredFramesPerSecond = 60
         rendersContinuously = true
         delegate = self
         for name in [BearRig.body, BearRig.head, BearRig.earL, BearRig.earR, BearRig.eyeL, BearRig.eyeR, BearRig.armL, BearRig.armR, BearRig.tail] {
@@ -334,10 +335,9 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         time += dt
         if let k = pendingKick {
             pendingKick = nil; started = time; kick(k)
-            let calm = k == .sleepy || k == .rest
-            DispatchQueue.main.async { [weak self] in self?.preferredFramesPerSecond = calm ? 30 : 60 }
         }
         let situation = _situation, lean = _lean, facingRight = _facingRight
+        defer { pace(situation, look: look) }
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         var p = BearMotion.pose(situation, t: time - started, look: look, lean: lean, facingRight: facingRight, reduce: reduce)
         // 평소 눈 깜빡임(3~6초마다 0.12초)
@@ -363,6 +363,20 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         for n in [BearRig.eyeL, BearRig.eyeR] {
             if let node = nodes[n], let r = rest[n] { node.scale = SCNVector3(r.x, r.y * max(eyes, 0.06), r.z) }
         }
+    }
+
+    /// 움직임이 있을 때만 60fps, 숨쉬기·깜빡임만 남으면 0.5초 뒤 30fps(가만히 있을 때 CPU 절약).
+    /// 30fps에서도 숨쉬기는 느려서 끊겨 보이지 않는다. 커서가 움직이거나 스프링이 빠르게 움직이면 바로 60.
+    private func pace(_ s: Situation, look: CGPoint) {
+        let moving = hypot(look.x - lastLook.x, look.y - lastLook.y) > 0.002
+            || springs.contains { $0.key != "squash" && $0.key != "eyes" && abs($0.value.velocity) > 0.05 }
+            || ![.idle, .sleepy, .rest].contains(s)
+        lastLook = look
+        if moving { calmSince = time }
+        let want = time - calmSince > 0.5 ? 30 : 60
+        guard want != fps else { return }
+        fps = want
+        DispatchQueue.main.async { [weak self] in self?.preferredFramesPerSecond = want }
     }
 
     /// 확인용: 상황마다 1초 진행한 모습을 PNG로(`Tasky --render-bear <폴더>`)
