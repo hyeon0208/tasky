@@ -861,7 +861,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                      UserDefaults.standard.set(Self.drawerKeys[$0].id, forKey: "drawerKey") }],
                 [NSView(), hint("이 키를 누른 채 펫에 커서를 올리면 열려요")],
                 [label("싱잉볼 소리 크기"), bowlSlider],
-                [label("펫 움직임 끄기"), check(Pet3DView.still) { Pet3DView.still = $0 }, hint("3D 곰이 멈춰 CPU를 아껴요. 표정은 바뀌어요")],
+                [label("펫 움직임 끄기"), check(Pet3DView.still) { Pet3DView.still = $0 }, hint("3D 곰이 가만히 멈춰 CPU를 아껴요")],
                 [label("펫 위에 시계"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
                     ClockMode.current = ClockMode.allCases[$0] }],
                 [label("24시간제로 보기"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],

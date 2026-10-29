@@ -209,7 +209,6 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         get { lock.withLock { _situation } }
         set {
             lock.withLock { if newValue != _situation { _situation = newValue; pendingKick = newValue } }
-            if Self.still { settle() }
         }
     }
     var lean: Double { get { lock.withLock { _lean } } set { lock.withLock { _lean = newValue } } }
@@ -308,10 +307,11 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         if Self.still { settle() }
     }
 
-    /// 멈춰 있을 때: 지금 상황의 자세로 바로 옮겨 한 장 그린다(그리기 루프가 멈춰 있어 경쟁 없음)
+    /// 멈춰 있을 때: 평소 자세로 옮겨 한 장 그린다(그리기 루프가 멈춰 있어 경쟁 없음)
     private func settle() {
         guard !isPlaying else { return }
-        for _ in 0..<90 { advance(1.0 / 60, look: .zero) }
+        time = 0; started = 0   // 숨쉬기 사인을 0에 맞춰 늘 같은 모습
+        for _ in 0..<120 { advance(1.0 / 60, look: .zero) }
         needsDisplay = true
     }
 
@@ -356,15 +356,17 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     func advance(_ dt: Double, look: CGPoint) {
         lock.lock(); defer { lock.unlock() }
         time += dt
-        if let k = pendingKick {
+        if let k = pendingKick, !still {
             pendingKick = nil; started = time; kick(k)
         }
-        let situation = _situation, lean = _lean, facingRight = _facingRight
+        // 움직임 끄기면 상황과 상관없이 늘 평소 모습으로 가만히(사용자 결정)
+        let still = Self.still
+        let situation = still ? .idle : _situation, lean = still ? 0 : _lean, facingRight = _facingRight
         defer { pace(situation, look: look) }
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         var p = BearMotion.pose(situation, t: time - started, look: look, lean: lean, facingRight: facingRight, reduce: reduce)
         // 평소 눈 깜빡임(3~6초마다 0.12초)
-        if time >= nextBlink { if time > nextBlink + 0.12 { nextBlink = time + .random(in: 3...6) } else if p.eyes > 0.5 { p.eyes = 0.1 } }
+        if !still, time >= nextBlink { if time > nextBlink + 0.12 { nextBlink = time + .random(in: 3...6) } else if p.eyes > 0.5 { p.eyes = 0.1 } }
 
         let squash = follow("squash", p.squash, dt)
         let wide = 1 / sqrt(max(squash, 0.5))   // 부피 보존
