@@ -356,7 +356,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     func advance(_ dt: Double, look: CGPoint) {
         lock.lock(); defer { lock.unlock() }
         time += dt
-        if let k = pendingKick, !still {
+        if let k = pendingKick, !Self.still {
             pendingKick = nil; started = time; kick(k)
         }
         // 움직임 끄기면 상황과 상관없이 늘 평소 모습으로 가만히(사용자 결정)
