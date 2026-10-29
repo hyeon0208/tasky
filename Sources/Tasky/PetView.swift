@@ -42,7 +42,7 @@ final class PetView: NSView {
     var bear: Pet3DView? {
         didSet {
             oldValue?.removeFromSuperview()
-            if let bear { bear.frame = bounds; bear.autoresizingMask = [.width, .height]; addSubview(bear) }
+            if let bear { bear.frame = iconRect; addSubview(bear) }   // 크기는 layout()에서(자동 늘이기는 알약으로 줄 때 0 크기가 됨)
             effectLayer.zPosition = 10   // 효과(음표·Zz)가 3D 곰 위에 보이게
             show()
         }

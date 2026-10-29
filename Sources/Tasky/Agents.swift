@@ -27,10 +27,10 @@ enum HookClient {
     static func run(tool: String) -> Int32 {
         let input = FileHandle.standardInput.readDataToEndOfFile()
         guard var payload = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any] else { return 0 }
-        payload["kongpod_tool"] = tool
-        payload["kongpod_time"] = Date().timeIntervalSince1970
+        payload["tasky_tool"] = tool
+        payload["tasky_time"] = Date().timeIntervalSince1970
         // 터미널 앱(macOS가 앱에서 실행한 프로세스에 넣어 주는 값). '터미널로 가기'에 쓴다.
-        payload["kongpod_app"] = ProcessInfo.processInfo.environment["__CFBundleIdentifier"]
+        payload["tasky_app"] = ProcessInfo.processInfo.environment["__CFBundleIdentifier"]
         guard var line = try? JSONSerialization.data(withJSONObject: payload) else { return 0 }
         line.append(0x0A)
         if !send(line) {
@@ -159,12 +159,12 @@ final class AgentStore {
 
     func apply(_ e: [String: Any], offline: Bool = false) {
         guard let id = e["session_id"] as? String, let event = e["hook_event_name"] as? String else { return }
-        let tool = e["kongpod_tool"] as? String ?? "claude"
+        let tool = (e["tasky_tool"] ?? e["kongpod_tool"]) as? String ?? "claude"
         let key = "\(tool):\(id)"
-        let time = (e["kongpod_time"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
+        let time = ((e["tasky_time"] ?? e["kongpod_time"]) as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
         var s = sessions[key] ?? AgentSession(id: key, tool: tool, cwd: e["cwd"] as? String ?? "?", state: .working, updated: time)
         if let cwd = e["cwd"] as? String { s.cwd = cwd }
-        if let app = e["kongpod_app"] as? String { s.app = app }
+        if let app = (e["tasky_app"] ?? e["kongpod_app"]) as? String { s.app = app }
         s.updated = time
         s.whileOff = offline
 

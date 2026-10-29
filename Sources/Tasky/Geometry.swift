@@ -215,7 +215,7 @@ enum SelfTest {
         var announced: [AgentSession.State] = []
         store.onChange = { if let s = $0 { announced.append(s.state) } }
         func ev(_ name: String, _ extra: [String: Any] = [:]) -> [String: Any] {
-            ["session_id": "s1", "hook_event_name": name, "cwd": "/tmp/my-app", "kongpod_tool": "claude"].merging(extra) { $1 }
+            ["session_id": "s1", "hook_event_name": name, "cwd": "/tmp/my-app", "tasky_tool": "claude"].merging(extra) { $1 }
         }
         store.apply(ev("UserPromptSubmit"))
         store.apply(ev("Notification", ["notification_type": "idle_prompt"]))
@@ -253,7 +253,7 @@ enum SelfTest {
             try? pipe.fileHandleForWriting.close()
             let deadline = Date().addingTimeInterval(3)
             while got == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
-            check(got?["kongpod_tool"] as? String == "codex" && got?["hook_event_name"] as? String == "Stop", "훅이 소켓으로 전달")
+            check(got?["tasky_tool"] as? String == "codex" && got?["hook_event_name"] as? String == "Stop", "훅이 소켓으로 전달")
         }
 
         // F6 싱잉볼: 알림 보류 규칙, 소리 세기, 오디오 엔진 켜고 끄기

@@ -1214,8 +1214,13 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         // 펫이 화면 오른쪽에 있으면 서랍은 펫 왼쪽에 열리고, 넓어질 때 왼쪽으로 자란다
         let growsLeft = c.x > v.midX
         var x = growsLeft ? shown.minX - size.width - 8 : shown.maxX + 8
+        var y = min(max(c.y - size.height / 2, v.minY + 8), v.maxY - size.height - 8)
+        if dock == .top {   // 위(노치) 알약: 접힌 알약 바로 아래, 가운데 맞춤
+            let pill = Geometry.islandFrame(dock: .top, expanded: false, center: c, in: v)
+            x = pill.midX - size.width / 2
+            y = max(pill.minY - size.height - 8, v.minY + 8)
+        }
         x = min(max(x, v.minX + 8), v.maxX - size.width - 8)
-        let y = min(max(c.y - size.height / 2, v.minY + 8), v.maxY - size.height - 8)
 
         let panel = FloatingPanel(size: size)
         panel.keyable = true            // 클릭하면 키 입력(스페이스, Esc)을 받는다. 열 때는 포커스를 가져가지 않는다
