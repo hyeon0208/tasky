@@ -10,15 +10,17 @@ struct SettingsTab {
     let content: NSView
 }
 
-/// 아이콘 탭 줄과 내용. 탭을 바꾸면 `onResize`로 새 크기를 알린다(창 높이는 내용에 맞춘다).
-final class SettingsTabs: NSView {
-    static let width: CGFloat = 520
+/// 왼쪽 목록 + 오른쪽 내용(macOS 시스템 설정 모양, F19). 창 크기는 고정, 긴 내용은 오른쪽만 스크롤.
+final class SettingsTabs: NSView, NSTableViewDataSource, NSTableViewDelegate {
+    static let sidebarWidth: CGFloat = 180
+    static let width: CGFloat = 500          // 오른쪽 내용 폭
+    static let size = CGSize(width: sidebarWidth + width, height: 520)
     private let tabs: [SettingsTab]
-    private var buttons: [NSButton] = []
-    private let bar = NSStackView()
+    private let table = NSTableView()
+    private let scroll = NSScrollView()
     private let title = NSTextField(labelWithString: "")
-    private var current: NSView?
-    var onResize: (CGSize) -> Void = { _ in }
+    /// 이 탭 앞에 구분선(개발자·정보)
+    private let splitBefore: Set<String> = ["debug"]
 
     private static var lastTab: String? {
         get { UserDefaults.standard.string(forKey: "settingsTab") }
@@ -27,104 +29,238 @@ final class SettingsTabs: NSView {
 
     init(tabs: [SettingsTab]) {
         self.tabs = tabs
-        super.init(frame: .zero)
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.alignment = .center
+        super.init(frame: CGRect(origin: .zero, size: Self.size))
+        // 왼쪽 목록
+        let side = NSVisualEffectView(frame: CGRect(x: 0, y: 0, width: Self.sidebarWidth, height: Self.size.height))
+        side.material = .sidebar
+        side.blendingMode = .withinWindow
+        side.autoresizingMask = [.height]
+        addSubview(side)
+        let col = NSTableColumn(identifier: .init("tab"))
+        col.width = Self.sidebarWidth - 20
+        table.addTableColumn(col)
+        table.headerView = nil
+        table.style = .sourceList
+        table.rowHeight = 30
+        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.backgroundColor = .clear
+        table.allowsEmptySelection = false
+        table.dataSource = self
+        table.delegate = self
+        table.setAccessibilityLabel("설정 목록")
+        let sideScroll = NSScrollView(frame: side.bounds.insetBy(dx: 8, dy: 0).offsetBy(dx: 0, dy: -12))
+        sideScroll.frame.size.height = Self.size.height - 24
+        sideScroll.frame.origin.y = 12
+        sideScroll.drawsBackground = false
+        sideScroll.documentView = table
+        sideScroll.hasVerticalScroller = false
+        side.addSubview(sideScroll)
+        // 오른쪽 제목 + 내용
+        title.font = .systemFont(ofSize: 17, weight: .bold)
+        title.frame = CGRect(x: Self.sidebarWidth + 24, y: Self.size.height - 44, width: Self.width - 48, height: 24)
         addSubview(title)
-        bar.orientation = .horizontal
-        bar.spacing = 2
-        // 탭이 많아도 창 폭 안에 다 들어가게 버튼 폭을 나눈다
-        let buttonWidth = min(72, (Self.width - 16 - bar.spacing * CGFloat(tabs.count - 1)) / CGFloat(tabs.count))
-        for (i, t) in tabs.enumerated() {
-            let b = ClosureButton("") { [weak self] in self?.select(i) }
-            b.isBordered = false
-            b.image = NSImage(systemSymbolName: t.symbol, accessibilityDescription: t.title)?
-                .withSymbolConfiguration(.init(pointSize: 17, weight: .regular))
-            b.title = t.title
-            b.imagePosition = .imageAbove
-            b.font = .systemFont(ofSize: 11)
-            b.setAccessibilityRole(.radioButton)
-            b.widthAnchor.constraint(equalToConstant: buttonWidth).isActive = true
-            b.lineBreakMode = .byClipping
-            b.heightAnchor.constraint(equalToConstant: 48).isActive = true
-            b.wantsLayer = true
-            b.layer?.cornerRadius = 8
-            buttons.append(b)
-            bar.addArrangedSubview(b)
-        }
-        addSubview(bar)
+        scroll.frame = CGRect(x: Self.sidebarWidth, y: 0, width: Self.width, height: Self.size.height - 56)
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        addSubview(scroll)
+        table.reloadData()
         select(tabs.firstIndex { $0.id == Self.lastTab } ?? 0)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private static let headerHeight: CGFloat = 96
-
     func select(_ i: Int) {
         Self.lastTab = tabs[i].id
-        for (j, b) in buttons.enumerated() {
-            let on = i == j
-            b.contentTintColor = on ? .controlAccentColor : .secondaryLabelColor
-            b.layer?.backgroundColor = on ? NSColor.controlAccentColor.withAlphaComponent(0.16).cgColor : nil
-            b.setAccessibilityValue(on)
-        }
+        if table.selectedRow != i { table.selectRowIndexes([i], byExtendingSelection: false) }
         title.stringValue = tabs[i].title
-        current?.removeFromSuperview()
         let content = tabs[i].content
-        addSubview(content)
-        current = content
-        let size = CGSize(width: Self.width, height: Self.headerHeight + content.fittingSize.height)
-        layoutFor(size)
-        onResize(size)
+        // 내용은 제 높이로 두고, 문서만 스크롤 칸보다 짧지 않게(남는 공간을 줄이 가져가 늘어나지 않게)
+        let fit = content.fittingSize.height
+        content.frame = CGRect(x: 0, y: 0, width: Self.width, height: fit)
+        let doc = FlippedView(frame: CGRect(x: 0, y: 0, width: Self.width, height: max(fit, scroll.contentSize.height)))
+        doc.addSubview(content)
+        scroll.documentView = doc
+        doc.scroll(.zero)
     }
 
-    private func layoutFor(_ size: CGSize) {
-        frame.size = size
-        title.frame = CGRect(x: 0, y: size.height - 26, width: size.width, height: 18)
-        let barSize = bar.fittingSize
-        bar.frame = CGRect(x: (size.width - barSize.width) / 2, y: size.height - 30 - barSize.height - 8, width: barSize.width, height: barSize.height)
-        if let current {
-            current.frame = CGRect(x: 0, y: 0, width: size.width, height: size.height - Self.headerHeight)
+    func numberOfRows(in tableView: NSTableView) -> Int { tabs.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let t = tabs[row]
+        let cell = NSTableCellView()
+        // 색 있는 둥근 사각 아이콘(시스템 설정 모양)
+        let tile = NSView()
+        tile.wantsLayer = true
+        tile.layer?.cornerRadius = 6
+        tile.layer?.backgroundColor = Self.tint(t.id).cgColor
+        let icon = NSImageView(image: NSImage(systemSymbolName: t.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold)) ?? NSImage())
+        icon.contentTintColor = .white
+        let name = NSTextField(labelWithString: t.title)
+        name.font = .systemFont(ofSize: 13)
+        for v in [tile, icon, name] { v.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(v) }
+        NSLayoutConstraint.activate([
+            tile.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+            tile.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            tile.widthAnchor.constraint(equalToConstant: 22), tile.heightAnchor.constraint(equalToConstant: 22),
+            icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor), icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+            name.leadingAnchor.constraint(equalTo: tile.trailingAnchor, constant: 9),
+            name.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        cell.textField = name
+        if splitBefore.contains(t.id) || (t.id == "about" && !tabs.contains { $0.id == "debug" }) {
+            let line = NSBox()
+            line.boxType = .separator
+            line.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(line)
+            NSLayoutConstraint.activate([
+                line.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+                line.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
+                line.topAnchor.constraint(equalTo: cell.topAnchor, constant: -1),
+            ])
+        }
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        if table.selectedRow >= 0 { select(table.selectedRow) }
+    }
+
+    private static func tint(_ id: String) -> NSColor {
+        switch id {
+        case "general": .systemGray
+        case "pet": .systemOrange
+        case "alerts": .systemRed
+        case "keyboard": .systemBlue
+        case "clipboard": .systemTeal
+        case "snap": .systemIndigo
+        case "debug": .systemBrown
+        default: .systemGray
         }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // 탭 줄 아래 구분선
-        NSColor.separatorColor.setFill()
-        NSRect(x: 0, y: bounds.height - Self.headerHeight + 0.5, width: bounds.width, height: 1).fill()
-    }
-
-    /// 구역(제목 + 이름·값 줄)들을 격자로. 제목이 nil이면 제목 줄 없이.
+    /// 구역들: 구역 제목(작은 회색) + 둥근 카드 안의 줄들.
+    /// 줄 = [이름, 컨트롤] 또는 [이름, 컨트롤, 설명]. 이름 자리가 빈 NSView면 그 줄은 카드 폭 전체를 쓴다(안내·미리보기).
     static func grid(_ sections: [(String?, [[NSView]])]) -> NSView {
-        var rows: [[NSView]] = []
-        var headerRows: [Int] = []
-        for (title, items) in sections {
-            if let title {
-                let t = NSTextField(labelWithString: title)
-                t.font = .systemFont(ofSize: 12, weight: .semibold)
-                t.textColor = .secondaryLabelColor
-                headerRows.append(rows.count)
-                rows.append([t, NSView()])
-            }
-            rows += items
-        }
-        let grid = NSGridView(views: rows)
-        grid.rowSpacing = 10
-        grid.columnSpacing = 16
-        grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 0).width = 130
-        grid.rowAlignment = .firstBaseline
-        for i in headerRows {
-            let row = grid.row(at: i)
-            row.mergeCells(in: NSRange(location: 0, length: 2))
-            row.cell(at: 0).xPlacement = .leading
-            row.topPadding = i == 0 ? 0 : 10
-        }
-        let stack = NSStackView(views: [grid])
+        let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 22, bottom: 20, right: 22)
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 24, bottom: 24, right: 24)
+        let cardWidth = width - 48
+        for (i, (title, items)) in sections.enumerated() {
+            if let title {
+                let t = NSTextField(labelWithString: title)
+                t.font = .systemFont(ofSize: 11, weight: .semibold)
+                t.textColor = .secondaryLabelColor
+                if i > 0 { stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!) }
+                stack.addArrangedSubview(t)
+            } else if i > 0 {
+                stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
+            }
+            stack.addArrangedSubview(card(items, width: cardWidth))
+        }
         return stack
     }
+
+    private static func card(_ items: [[NSView]], width: CGFloat) -> NSView {
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 10
+        box.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.05).cgColor
+        box.layer?.borderWidth = 0.5
+        box.layer?.borderColor = NSColor.separatorColor.cgColor
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.widthAnchor.constraint(equalToConstant: width).isActive = true
+        var above: NSLayoutYAxisAnchor = box.topAnchor
+        for (n, row) in items.enumerated() {
+            let line = NSView()
+            line.translatesAutoresizingMaskIntoConstraints = false
+            box.addSubview(line)
+            let wide = type(of: row[0]) == NSView.self   // 이름 없는 줄
+            if wide {
+                let v = row[1]
+                v.translatesAutoresizingMaskIntoConstraints = false
+                line.addSubview(v)
+                NSLayoutConstraint.activate([
+                    v.leadingAnchor.constraint(equalTo: line.leadingAnchor, constant: 14),
+                    v.trailingAnchor.constraint(lessThanOrEqualTo: line.trailingAnchor, constant: -14),
+                    v.topAnchor.constraint(equalTo: line.topAnchor, constant: 8),
+                    v.bottomAnchor.constraint(equalTo: line.bottomAnchor, constant: -8),
+                ])
+            } else {
+                let name = row[0], control = row[1]
+                if let f = name as? NSTextField { f.font = .systemFont(ofSize: 13) }
+                let left = NSStackView(views: [name] + (row.count > 2 ? [row[2]] : []))
+                left.orientation = .vertical
+                left.alignment = .leading
+                left.spacing = 2
+                if row.count > 2, let d = row[2] as? NSTextField {
+                    d.font = .systemFont(ofSize: 11)
+                    d.textColor = .secondaryLabelColor
+                    d.lineBreakMode = .byWordWrapping
+                    d.maximumNumberOfLines = 2
+                    d.preferredMaxLayoutWidth = width * 0.5
+                }
+                for v in [left, control] { v.translatesAutoresizingMaskIntoConstraints = false; line.addSubview(v) }
+                left.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                NSLayoutConstraint.activate([
+                    left.leadingAnchor.constraint(equalTo: line.leadingAnchor, constant: 14),
+                    left.centerYAnchor.constraint(equalTo: line.centerYAnchor),
+                    left.topAnchor.constraint(greaterThanOrEqualTo: line.topAnchor, constant: 8),
+                    control.leadingAnchor.constraint(greaterThanOrEqualTo: left.trailingAnchor, constant: 12),
+                    control.trailingAnchor.constraint(equalTo: line.trailingAnchor, constant: -14),
+                    control.centerYAnchor.constraint(equalTo: line.centerYAnchor),
+                    control.topAnchor.constraint(greaterThanOrEqualTo: line.topAnchor, constant: 6),
+                    line.heightAnchor.constraint(greaterThanOrEqualToConstant: 40),
+                    left.bottomAnchor.constraint(lessThanOrEqualTo: line.bottomAnchor, constant: -8),
+                    control.bottomAnchor.constraint(lessThanOrEqualTo: line.bottomAnchor, constant: -6),
+                ])
+                let snug = line.heightAnchor.constraint(equalToConstant: 40)   // 높이를 하나로 정한다(내용이 크면 진다)
+                snug.priority = .defaultLow
+                snug.isActive = true
+            }
+            NSLayoutConstraint.activate([
+                line.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+                line.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+                line.topAnchor.constraint(equalTo: above),
+            ])
+            if n > 0 && !wide {
+                let sep = NSBox()
+                sep.boxType = .separator
+                sep.translatesAutoresizingMaskIntoConstraints = false
+                box.addSubview(sep)
+                NSLayoutConstraint.activate([
+                    sep.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 14),
+                    sep.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -14),
+                    sep.topAnchor.constraint(equalTo: line.topAnchor),
+                ])
+            }
+            above = line.bottomAnchor
+        }
+        above.constraint(equalTo: box.bottomAnchor).isActive = true
+        return box
+    }
+
+    /// 켜기/끄기 스위치
+    static func toggle(_ on: Bool, _ change: @escaping (Bool) -> Void) -> NSSwitch {
+        let s = ClosureSwitch()
+        s.controlSize = .small
+        s.state = on ? .on : .off
+        s.handler = { [weak s] in change(s?.state == .on) }
+        return s
+    }
+}
+
+final class ClosureSwitch: NSSwitch {
+    var handler: () -> Void = {}
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        target = self
+        action = #selector(fire)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    @objc private func fire() { handler() }
 }
 
 /// 키보드 탭의 '바로 테스트' 칸: 지금 입력 소스(가/A)와 대문자 고정(⇪)을 보여 주고, 설정을 바꾸면 여기서 바로 쳐 본다.

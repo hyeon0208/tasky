@@ -99,7 +99,7 @@ final class AgentListController: NSObject {
         if sessions.isEmpty {
             let empty = NSTextField(wrappingLabelWithString: anyConnected
                 ? "아직 받은 작업이 없어요. 터미널에서 Claude Code나 Codex에 일을 맡기면 여기에 보여요."
-                : "아래에서 Claude Code나 Codex를 연결하면, 작업이 끝나거나 나를 기다릴 때 깍지가 알려줘요.")
+                : "아래에서 Claude Code나 Codex를 연결하면, 작업이 끝나거나 나를 기다릴 때 펫이 알려 줘요.")
             empty.textColor = .secondaryLabelColor
             empty.preferredMaxLayoutWidth = size.width - 28
             stack.addArrangedSubview(empty)

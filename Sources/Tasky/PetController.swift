@@ -86,8 +86,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         petView.bodyColor = bodyColor
         petView.character = Character(name: characterName)
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem("새 깍지 부르기", onAdd))
-        menu.addItem(ClosureMenuItem("이 깍지 보내기") { [weak self] in self.map(onRemove) })
+        menu.addItem(ClosureMenuItem("새 펫 부르기", onAdd))
+        menu.addItem(ClosureMenuItem("이 펫 보내기") { [weak self] in self.map(onRemove) })
         menu.addItem(.separator())
         let alertsItem = NSMenuItem(title: "작업 알림 받기", action: nil, keyEquivalent: "")
         for (value, title) in Self.alertTools {
@@ -724,14 +724,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             p.selectItem(at: max(selected, 0))
             return p
         }
-        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSButton {
-            let b = ClosureButton("") {}
-            b.setButtonType(.switch)
-            b.title = ""
-            b.state = on ? .on : .off
-            b.handler = { [weak b] in toggle(b?.state == .on) }
-            return b
-        }
+        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSView { SettingsTabs.toggle(on, toggle) }
         let toolButtons = [HookInstaller.Tool.claude, .codex].map { tool -> NSButton in
             let b = ClosureButton("") {}
             func refresh() { b.title = HookInstaller.isInstalled(tool) ? "연결 끊기" : "연결" }
@@ -828,7 +821,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             return row
         }
         let initialRow = repeatRow(KeyRepeat.initial), rateRow = repeatRow(KeyRepeat.rate)
-        let restoreButton = ClosureButton("되돌리기") { [weak self] in
+        let restoreButton = ClosureButton("처음 값으로") { [weak self] in
             KeyRepeat.restore()
             self?.closeSettings()   // 슬라이더를 되돌린 값으로 다시 그리도록 닫는다
         }
@@ -849,49 +842,50 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         }
         let tabs = [
             SettingsTab(id: "general", title: "일반", symbol: "gearshape", content: SettingsTabs.grid([(nil, [
-                [label("컴퓨터를 켤 때 함께 실행"), check(LoginItem.isOn) { LoginItem.set($0) }],
-                [label("원형 메뉴 투명도"), glassRow],
+                [label("로그인할 때 Tasky 열기"), check(LoginItem.isOn) { LoginItem.set($0) }],
+                [label("원형 메뉴 버튼 투명도"), glassRow, hint("펫을 누르면 나오는 버튼이에요")],
                 [NSView(), ringPreview],
-                [label("폴더 서랍 열기 키"),
+                [label("폴더 서랍 바로 열기"),
                  popup(Self.drawerKeys.map(\.title), selected: Self.drawerKeys.firstIndex { $0.id == UserDefaults.standard.string(forKey: "drawerKey") } ?? 0) {
                      UserDefaults.standard.set(Self.drawerKeys[$0].id, forKey: "drawerKey") }],
-                [NSView(), hint("이 키를 누른 채로 펫 위에 커서를 올리면 클릭 없이 폴더 서랍이 열려요")],
-                [label("싱잉볼 소리"), bowlSlider],
-                [label("시계 말풍선"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
+                [NSView(), hint("이 키를 누른 채 펫에 커서를 올리면 열려요")],
+                [label("싱잉볼 소리 크기"), bowlSlider],
+                [label("펫 위에 시계"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
                     ClockMode.current = ClockMode.allCases[$0] }],
-                [label("24시간제"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],
-                [label("작업 구슬 보이기"), check(BeadsSetting.on) { BeadsSetting.on = $0 }],
-                [label("초 보이기"), check(ClockMode.showSeconds) { ClockMode.showSeconds = $0 }],
+                [label("24시간제로 보기"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],
+                [label("펫 위에 작업 구슬"), check(BeadsSetting.on) { BeadsSetting.on = $0 }, hint("AI 작업마다 구슬 하나, 색으로 상태를 알려요")],
+                [label("초까지 보기"), check(ClockMode.showSeconds) { ClockMode.showSeconds = $0 }],
             ])])),
-            SettingsTab(id: "pet", title: "깍지", symbol: "leaf", content: SettingsTabs.grid([("이 깍지만", [
+            SettingsTab(id: "pet", title: "펫", symbol: "pawprint", content: SettingsTabs.grid([("이 펫에만 적용 — 펫이 여러 마리면 지금 연 펫만 바뀌어요", [
                 [label("크기"), sizeRow],
                 [label("캐릭터"), charPopup],
-                [label("이 깍지가 받을 알림"),
+                [label("이 펫이 알려 줄 작업"),
                  popup(Self.alertTools.map(\.1), selected: Self.alertTools.firstIndex { $0.0 == alertTool } ?? 0) { [weak self] in
                      self?.alertTool = Self.alertTools[$0].0 }],
             ])])),
             SettingsTab(id: "alerts", title: "작업 알림", symbol: "bell", content: SettingsTabs.grid([(nil, [
-                [label("알림음"), check(AlertCard.soundOn) { AlertCard.soundOn = $0 }],
-                [label("Claude Code"), toolButtons[0]],
-                [label("Codex"), toolButtons[1]],
+                [label("알림 소리"), check(AlertCard.soundOn) { AlertCard.soundOn = $0 }],
+                [label("Claude Code 연결"), toolButtons[0], hint("끝나거나 내 승인이 필요하면 펫이 알려요")],
+                [label("Codex 연결"), toolButtons[1], hint("끝나거나 내 승인이 필요하면 펫이 알려요")],
             ])])),
             SettingsTab(id: "keyboard", title: "키보드", symbol: "keyboard", content: SettingsTabs.grid([
-                ("바로 테스트", [[label(""), keyTest]]),
-                ("한영 전환 · 키 반복", [
-                [label("한영 전환"), check(KeySwitcher.enabled) { on in
+                ("여기서 쳐 보기", [[NSView(), keyTest]]),
+                ("한영 전환", [
+                [label("한 키로 한영 바꾸기"), check(KeySwitcher.enabled) { on in
                     KeySwitcher.enabled = on
                     KeySwitcher.shared.apply(ask: on)
                     refreshKeyboard()
                 }],
-                [label("전환 키"), popup(SwitchKey.allCases.map(\.title), selected: SwitchKey.allCases.firstIndex(of: KeySwitcher.key) ?? 0) {
+                [label("쓸 키"), popup(SwitchKey.allCases.map(\.title), selected: SwitchKey.allCases.firstIndex(of: KeySwitcher.key) ?? 0) {
                     KeySwitcher.key = SwitchKey.allCases[$0]
                     KeySwitcher.shared.apply()
                     refreshKeyboard()
                 }],
                 [NSView(), kbStatusRow],
-                [label("반복 시작까지"), initialRow],
-                [label("반복 속도"), rateRow],
-                [NSView(), hint("바로 적용돼요. 다시 로그인해도 유지돼요")],
+                ]), ("키 반복", [
+                [label("꾹 누르고 반복이 시작될 때까지"), initialRow],
+                [label("반복 빠르기"), rateRow],
+                [NSView(), hint("바로 적용되고 계속 유지돼요")],
                 [NSView(), restoreButton],
                 ]),
             ])),
@@ -904,8 +898,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             }())] : []) + [
             SettingsTab(id: "about", title: "정보", symbol: "info.circle", content: SettingsTabs.grid([(nil, [
                 [label("버전"), NSTextField(labelWithString: version)],
-                [label("입력 모니터링"), permission(CGPreflightListenEventAccess())],
-                [label("손쉬운 사용"), permission(AXIsProcessTrusted())],
+                [label("입력 모니터링"), permission(CGPreflightListenEventAccess()), hint("한 키로 한영 바꾸기에 써요")],
+                [label("손쉬운 사용"), permission(AXIsProcessTrusted()), hint("단축키로 창 정리에 써요")],
             ])])),
         ]
         let tabView = SettingsTabs(tabs: tabs)
@@ -920,8 +914,10 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
         let v = screen.visibleFrame
         let shown = pet.frame.intersection(v).isNull ? pet.frame : pet.frame.intersection(v)
+        // 펫 위, 안 되면 아래, 둘 다 넘치면 화면 가운데
         let x = min(max(shown.midX - size.width / 2, v.minX + 8), v.maxX - size.width - 8)
-        let y = shown.maxY + 8 + size.height <= v.maxY ? shown.maxY + 8 : max(shown.minY - size.height - 8, v.minY + 8)
+        let y = shown.maxY + 8 + size.height <= v.maxY ? shown.maxY + 8
+            : shown.minY - size.height - 8 >= v.minY ? shown.minY - size.height - 8 : v.midY - size.height / 2
         let panel = FloatingPanel(size: size)
         panel.keyable = true
         panel.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: false)
@@ -929,16 +925,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         panel.orderFrontRegardless()
         settingsPanel = panel
         follow(panel)
-        // 탭을 바꾸면 위쪽을 고정한 채 높이를 내용에 맞춘다
-        tabView.autoresizingMask = [.minYMargin]   // 창이 커지고 작아지는 동안 탭 줄은 위에 붙어 있다
-        tabView.onResize = { [weak panel, weak effect, weak tabView] size in
-            guard let panel, let effect, let tabView else { return }
-            var f = panel.frame
-            f.origin.y = max(f.maxY - size.height, v.minY + 8)   // 화면 아래로 넘치면 위로 올린다
-            f.size = size
-            tabView.frame.origin.y = effect.bounds.height - size.height
-            panel.setFrame(f, display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        }
         // 바깥(다른 앱)을 클릭하면 닫는다
         settingsMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in self?.closeSettings() }
     }
@@ -953,18 +939,12 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             f.preferredMaxLayoutWidth = 320
             return f
         }
-        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSButton {
-            let b = ClosureButton("") {}
-            b.setButtonType(.switch)
-            b.title = ""
-            b.state = on ? .on : .off
-            b.handler = { [weak b] in toggle(b?.state == .on) }
-            return b
-        }
+        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSView { SettingsTabs.toggle(on, toggle) }
         let status = note("")
         let openPermission = ClosureButton("권한 열기") {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
         }
+        let statusRow = NSStackView(views: [status, openPermission])
         var rows: [(SnapAction, NSButton, NSTextField)] = []
         func keyTitle(_ a: SnapAction) -> String { a.key.map { HotKey.title(keyCode: $0.code, modifiers: $0.mods) } ?? "없음" }
         func refresh() {
@@ -1013,24 +993,16 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         SnapController.shared.onChange = { refresh() }
         refresh()
         return SettingsTabs.grid([(nil, [
-            [label("창 정리"), check(SnapController.enabled) { SnapController.shared.setEnabled($0) }],
-            [NSView(), status],
-            [NSView(), openPermission],
-            [label("끌어서 맞추기"), check(SnapController.dragOn) { SnapController.dragOn = $0 }],
+            [label("단축키로 창 정리"), check(SnapController.enabled) { SnapController.shared.setEnabled($0) }, note("켜면 '손쉬운 사용' 권한을 물어요")],
+            [NSView(), statusRow],
+            [label("화면 끝으로 끌어 맞추기"), check(SnapController.dragOn) { SnapController.dragOn = $0 }, note("창을 왼쪽·오른쪽·위 끝이나 모서리로 끌어요")],
             [NSView(), note("단축키 버튼을 누르고 새 키를 누르세요. ⌫는 지우기, Esc는 취소예요.")],
         ] + keyRows)])
     }
 
     /// 설정 '클립보드' 탭
     private func clipboardSettings() -> NSView {
-        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSButton {
-            let b = ClosureButton("") {}
-            b.setButtonType(.switch)
-            b.title = ""
-            b.state = on ? .on : .off
-            b.handler = { [weak b] in toggle(b?.state == .on) }
-            return b
-        }
+        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSView { SettingsTabs.toggle(on, toggle) }
         func note(_ t: String) -> NSTextField {
             let f = NSTextField(wrappingLabelWithString: t)
             f.font = .systemFont(ofSize: 11)
@@ -1079,15 +1051,15 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let clearRow = NSStackView(views: [clear, clearAll])
         func label(_ t: String) -> NSTextField { NSTextField(labelWithString: t) }
         return SettingsTabs.grid([(nil, [
-            [label("클립보드 기록"), check(ClipWatcher.enabled) { on in
+            [label("복사한 것 기록하기"), check(ClipWatcher.enabled) { on in
                 ClipWatcher.enabled = on
                 if on { HotKey.shared.register() } else { HotKey.shared.unregister() }
                 refresh()
             }],
-            [label("기록 창 단축키"), record],
+            [label("기록 열기 단축키"), record],
             [NSView(), status],
-            [label("기록 개수"), limit],
-            [label("복사할 때 펫 반응"), check(UserDefaults.standard.object(forKey: "clipReact") as? Bool ?? true) {
+            [label("최대 기록 수"), limit, note("고정한 것은 세지 않아요")],
+            [label("복사하면 펫이 받아 들기"), check(UserDefaults.standard.object(forKey: "clipReact") as? Bool ?? true) {
                 UserDefaults.standard.set($0, forKey: "clipReact") }],
             [label("기록 지우기"), clearRow],
             [NSView(), note("비밀번호 관리자가 숨김 표시한 복사는 기록하지 않아요. 기록은 이 Mac에만 저장돼요.")],
@@ -1414,7 +1386,7 @@ final class App: NSObject {
         logo?.accessibilityDescription = "Tasky"
         statusItem.button?.image = logo
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem("새 깍지 부르기") { [weak self] in self?.addPet() })
+        menu.addItem(ClosureMenuItem("새 펫 부르기") { [weak self] in self?.addPet() })
         let sound = ClosureMenuItem("작업 알림음") {}
         sound.state = AlertCard.soundOn ? .on : .off
         sound.handler = { [weak sound] in
@@ -1422,7 +1394,7 @@ final class App: NSObject {
             sound?.state = AlertCard.soundOn ? .on : .off
         }
         menu.addItem(sound)
-        menu.addItem(ClosureMenuItem("깍지 모두 숨기기/보이기") { [weak self] in
+        menu.addItem(ClosureMenuItem("펫 모두 숨기기/보이기") { [weak self] in
             guard let self else { return }
             let show = !self.pets.contains { $0.isVisible }
             self.pets.forEach { $0.setVisible(show) }
