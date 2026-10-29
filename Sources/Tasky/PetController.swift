@@ -717,6 +717,12 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var settingsKeepAlive: [AnyObject] = []
     private var settingsMonitor: Any?
 
+    /// 메뉴 막대에서: 펫이 숨어 있어도 연다(화면 가운데)
+    func openSettingsFromMenu() {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+    }
+
     private func openSettings() {
         guard settingsPanel == nil else { return }
         closeRing()
@@ -855,6 +861,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                      UserDefaults.standard.set(Self.drawerKeys[$0].id, forKey: "drawerKey") }],
                 [NSView(), hint("이 키를 누른 채 펫에 커서를 올리면 열려요")],
                 [label("싱잉볼 소리 크기"), bowlSlider],
+                [label("펫 움직임 끄기"), check(Pet3DView.still) { Pet3DView.still = $0 }, hint("3D 곰이 멈춰 CPU를 아껴요. 표정은 바뀌어요")],
                 [label("펫 위에 시계"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
                     ClockMode.current = ClockMode.allCases[$0] }],
                 [label("24시간제로 보기"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],
@@ -917,19 +924,20 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         effect.layer?.masksToBounds = true
         effect.addSubview(tabView)
 
-        let v = screen.visibleFrame
+        let v = (pet.isVisible ? screen : NSScreen.main ?? screen).visibleFrame
         let shown = pet.frame.intersection(v).isNull ? pet.frame : pet.frame.intersection(v)
         // 펫 위, 안 되면 아래, 둘 다 넘치면 화면 가운데
         let x = min(max(shown.midX - size.width / 2, v.minX + 8), v.maxX - size.width - 8)
         let y = shown.maxY + 8 + size.height <= v.maxY ? shown.maxY + 8
             : shown.minY - size.height - 8 >= v.minY ? shown.minY - size.height - 8 : v.midY - size.height / 2
+        let origin = pet.isVisible ? CGPoint(x: x, y: y) : CGPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2)   // 펫이 숨어 있으면 화면 가운데
         let panel = FloatingPanel(size: size)
         panel.keyable = true
-        panel.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: false)
+        panel.setFrame(CGRect(origin: origin, size: size), display: false)
         panel.contentView = effect
         panel.orderFrontRegardless()
         settingsPanel = panel
-        follow(panel)
+        if pet.isVisible { follow(panel) }
         // 바깥(다른 앱)을 클릭하면 닫는다
         settingsMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in self?.closeSettings() }
     }
@@ -1252,6 +1260,7 @@ final class App: NSObject {
         let ids = UserDefaults.standard.stringArray(forKey: "pets") ?? []
         for id in ids { spawn(id: id) }
         if pets.isEmpty { addPet() }
+        if App.petsHidden { pets.forEach { $0.setVisible(false) } }
         setUpStatusItem()
 
         // 알림은 그 도구를 받는 펫 중 첫 번째(보이는 펫)가 알린다. 받는 펫이 없으면 첫 번째 펫이 알려 놓치지 않게 한다.
@@ -1290,6 +1299,11 @@ final class App: NSObject {
         let wnc = NSWorkspace.shared.notificationCenter
         wnc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.awayStart("sleep") }
         wnc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.awayEnd("sleep") }
+    }
+
+    static var petsHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: "petsHidden") }
+        set { UserDefaults.standard.set(newValue, forKey: "petsHidden") }
     }
 
     func addPet() {
@@ -1399,11 +1413,26 @@ final class App: NSObject {
             sound?.state = AlertCard.soundOn ? .on : .off
         }
         menu.addItem(sound)
-        menu.addItem(ClosureMenuItem("펫 모두 숨기기/보이기") { [weak self] in
-            guard let self else { return }
-            let show = !self.pets.contains { $0.isVisible }
-            self.pets.forEach { $0.setVisible(show) }
-        })
+        // 바탕화면에서 펫을 숨겨 두고 메뉴 막대로만 쓸 수 있다(다시 켜도 기억)
+        let shown = ClosureMenuItem("펫 보이기") {}
+        shown.state = App.petsHidden ? .off : .on
+        shown.handler = { [weak self, weak shown] in
+            App.petsHidden.toggle()
+            shown?.state = App.petsHidden ? .off : .on
+            self?.pets.forEach { $0.setVisible(!App.petsHidden) }
+        }
+        menu.addItem(shown)
+        let still = ClosureMenuItem("펫 움직임 끄기 (CPU 절약)") {}
+        still.state = Pet3DView.still ? .on : .off
+        still.handler = { [weak still] in
+            Pet3DView.still.toggle()
+            still?.state = Pet3DView.still ? .on : .off
+        }
+        menu.addItem(still)
+        menu.addItem(.separator())
+        let settings = ClosureMenuItem("설정…") { [weak self] in self?.pets.first?.openSettingsFromMenu() }
+        settings.keyEquivalent = ","
+        menu.addItem(settings)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Tasky 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu

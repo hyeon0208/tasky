@@ -207,7 +207,10 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     private var _situation: Situation = .idle, _lean = 0.0, _facingRight = false, pendingKick: Situation?
     var situation: Situation {
         get { lock.withLock { _situation } }
-        set { lock.withLock { if newValue != _situation { _situation = newValue; pendingKick = newValue } } }
+        set {
+            lock.withLock { if newValue != _situation { _situation = newValue; pendingKick = newValue } }
+            if Self.still { settle() }
+        }
     }
     var lean: Double { get { lock.withLock { _lean } } set { lock.withLock { _lean = newValue } } }
     var facingRight: Bool { get { lock.withLock { _facingRight } } set { lock.withLock { _facingRight = newValue } } }
@@ -223,6 +226,14 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     private var windowFrame = CGRect.zero
     @objc private func moved() { let f = window?.frame ?? .zero; lock.withLock { windowFrame = f } }
 
+    static let center: CGFloat = 0.55
+    /// 움직임 끄기(설정, CPU 절약): 그리기를 멈추고 상황이 바뀔 때만 한 장 그린다
+    static let stillChanged = Notification.Name("taskyStillChanged")
+    static var still: Bool {
+        get { UserDefaults.standard.bool(forKey: "petStill") }
+        set { UserDefaults.standard.set(newValue, forKey: "petStill"); NotificationCenter.default.post(name: stillChanged, object: nil) }
+    }
+
     /// 모델 파일: Application Support/Tasky/Characters/bear3d/model.usdz (없으면 도형 곰)
     static var modelURL: URL { Character.root().appendingPathComponent("bear3d/model.usdz") }
 
@@ -237,6 +248,9 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         }
         super.init(frame: frame, options: nil)
         let scene = SCNScene()
+        // 회전 축을 발바닥이 아니라 몸 가운데로: 굴러도·기울어도 몸이 카메라 밖으로 휘둘리지 않는다
+        bear.pivot = SCNMatrix4MakeTranslation(0, Self.center, 0)
+        bear.position.y = Self.center
         scene.rootNode.addChildNode(bear)
         let cam = SCNNode()
         cam.camera = SCNCamera()
@@ -283,13 +297,22 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         guard let window else { isPlaying = false; return }
         NotificationCenter.default.addObserver(self, selector: #selector(occlusion), name: NSWindow.didChangeOcclusionStateNotification, object: window)
         NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSWindow.didMoveNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(occlusion), name: Self.stillChanged, object: nil)
         occlusion()
         moved()
     }
     @objc private func occlusion() {
-        let visible = window?.occlusionState.contains(.visible) ?? false
-        isPlaying = visible
-        rendersContinuously = visible
+        let play = (window?.occlusionState.contains(.visible) ?? false) && !Self.still
+        isPlaying = play
+        rendersContinuously = play
+        if Self.still { settle() }
+    }
+
+    /// 멈춰 있을 때: 지금 상황의 자세로 바로 옮겨 한 장 그린다(그리기 루프가 멈춰 있어 경쟁 없음)
+    private func settle() {
+        guard !isPlaying else { return }
+        for _ in 0..<90 { advance(1.0 / 60, look: .zero) }
+        needsDisplay = true
     }
 
     /// 상황이 바뀌는 순간의 툭 치기(찌그러짐이 스프링으로 되튄다)
@@ -349,7 +372,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         let tilt = follow("bodyTilt", p.bodyTilt, dt), turn = follow("bodyTurn", p.bodyTurn, dt)
         let roll = reduce ? 0 : p.bodyRoll   // 구르기는 바로(스프링이면 늦게 돈다)
         bear.eulerAngles = SCNVector3(roll, turn, tilt)
-        bear.position.y = follow("lift", p.lift, dt)
+        bear.position.y = Self.center + follow("lift", p.lift, dt)
         nodes[BearRig.head]?.eulerAngles = SCNVector3(follow("headPitch", p.headPitch, dt), follow("headYaw", p.headYaw, dt), 0)
         let al = follow("armL", p.armL, dt), ar = follow("armR", p.armR, dt)
         nodes[BearRig.armL]?.eulerAngles.z = -al
@@ -383,7 +406,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     static func renderSamples(to dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let r = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
-        for (s, t) in [(Situation.idle, 1.0), (.pet, 0.3), (.drag, 0.6), (.land, 0.08), (.sleepy, 1.5), (.jobWaiting, 0.4), (.jobFailed, 1.0), (.sulk, 1.5), (.walk, 0.2), (.fileNear, 1.0)] {
+        for (s, t) in [(Situation.idle, 1.0), (.pet, 0.3), (.drag, 0.6), (.land, 0.08), (.sleepy, 1.5), (.jobWaiting, 0.4), (.jobFailed, 1.0), (.sulk, 1.5), (.walk, 0.2), (.fileNear, 1.0), (.toss, 0.17), (.toss, 0.35)] {
             let v = Pet3DView(frame: CGRect(x: 0, y: 0, width: 240, height: 240))
             v.nextBlink = 99
             if s == .land { v.situation = .drag; for _ in 0..<30 { v.advance(1.0 / 60, look: .zero) } }
@@ -393,7 +416,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
             r.pointOfView = v.pointOfView
             let img = r.snapshot(atTime: 0, with: CGSize(width: 240, height: 240), antialiasingMode: .multisampling4X)
             if let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-                try? png.write(to: dir.appendingPathComponent("\(s).png"))
+                try? png.write(to: dir.appendingPathComponent(s == .toss ? "toss\(Int(t * 100)).png" : "\(s).png"))
             }
         }
     }
