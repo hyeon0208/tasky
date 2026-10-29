@@ -83,6 +83,32 @@ enum Geometry {
         return CGRect(origin: o, size: s)
     }
 
+    /// F20 알약에서 여는 링: 알약 안쪽으로 한 겹 부채꼴. 칸끼리 `gap` 이상, 알약에서 `clear` 이상 떨어지는 가장 작은 반지름.
+    static func fanCenters(count: Int, dock: Dock, pill p: CGRect, gap: CGFloat = 66, clear: CGFloat = 36) -> [CGPoint] {
+        guard count > 0 else { return [] }
+        let base: Double = switch dock {
+        case .left: 0
+        case .right: 180
+        case .bottom: 90
+        case .top: 270
+        case .bottomLeft: 35   // 구석 알약은 화면 아래가 가까워 위로 치우친다
+        case .bottomRight: 145
+        case .free: 90
+        }
+        let span = min(160.0, 26.0 * Double(count - 1))
+        let step = count > 1 ? span / Double(count - 1) : 0
+        let c = CGPoint(x: p.midX, y: p.midY), avoid = p.insetBy(dx: -clear, dy: -clear)
+        var r = count > 1 ? Double(gap) / (2 * sin(step / 2 * .pi / 180)) : 0
+        while true {
+            let pts = (0..<count).map { i -> CGPoint in
+                let a = (base + span / 2 - step * Double(i)) * .pi / 180
+                return CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
+            }
+            if !pts.contains(where: avoid.contains) || r > 800 { return pts }
+            r += 4
+        }
+    }
+
     /// 링의 칸 중심점. 자유 상태는 위쪽 반원(첫 칸이 왼쪽 끝), 가장자리는 반원, 구석은 부채꼴이며 넘치면 바깥 겹으로.
     /// `size`는 펫 몸의 크기. 몸이 클수록 첫 겹이 바깥으로 물러난다(칸끼리 겹치지 않는 최소 반지름은 지킨다).
     static func slotCenters(count: Int, dock: Dock, center c: CGPoint, size: CGFloat = 80, roomAbove: Bool = true) -> [CGPoint] {
@@ -444,6 +470,20 @@ enum SelfTest {
                     check(small.contains(f), "아일랜드 작은 화면 안 \(d) \(ex)")
                 }
             }
+        }
+        // F20 알약 링: 한 겹 부채꼴, 칸끼리 겹치지 않고 알약을 가리지 않음
+        do {
+            let v = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            for d in [Dock.top, .left, .right, .bottom, .bottomLeft] {
+                let pill = Geometry.islandFrame(dock: d, expanded: false, center: CGPoint(x: 720, y: 450), in: v)
+                let pts = Geometry.fanCenters(count: 7, dock: d, pill: pill)
+                let r = pts.map { hypot($0.x - pill.midX, $0.y - pill.midY) }
+                check(r.max()! - r.min()! < 0.5, "알약 링 한 겹 \(d)")
+                check(zip(pts, pts.dropFirst()).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) >= 65 }, "알약 링 칸 간격 \(d)")
+                check(!pts.contains(where: pill.insetBy(dx: -35, dy: -35).contains), "알약 링이 알약을 가리지 않음 \(d)")
+            }
+            let top = Geometry.fanCenters(count: 7, dock: .top, pill: Geometry.islandFrame(dock: .top, expanded: false, center: CGPoint(x: 720, y: 900), in: v))
+            check(top.allSatisfy { $0.y < 896 - 30 }, "위 알약 링은 아래로")
         }
         // F18 3D 곰: 스프링·모션
         var sp = Spring(stiffness: 120, damping: 14)

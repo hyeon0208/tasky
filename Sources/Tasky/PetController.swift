@@ -448,7 +448,11 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             actions.append(.init(title: "터미널로 가기") { NSWorkspace.shared.openApplication(at: url, configuration: .init()) })
         }
         actions.append(.init(title: "목록 보기") { [weak self] in self?.openAgentList() })
-        alertCard.show(session: s, title: title, body: body, actions: actions, near: pet.frame, in: screen.visibleFrame)
+        // 알약이면 펼친 알약을 피해서(옆 알약은 옆에)
+        let v = screen.visibleFrame, c = CGPoint(x: pet.frame.midX, y: pet.frame.midY)
+        let near = dock.isDocked ? Geometry.islandFrame(dock: dock, expanded: true, center: c, in: v) : pet.frame
+        let side: CGFloat = !dock.isDocked || dock == .top || dock == .bottom ? 0 : dock.mirrored ? 1 : -1
+        alertCard.show(session: s, title: title, body: body, actions: actions, near: near, in: v, beside: side)
         follow(alertCard.panel)
     }
 
@@ -652,20 +656,16 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private func openRing(slots: [Slot], acceptsFiles: Bool) {
         closeRing()
         hoverWork?.cancel()
+        if petView.island?.expanded == true { place(animated: false) }   // 펼친 알약에서 열면 먼저 접는다(링은 접힌 알약 기준)
         let v = screen.visibleFrame
         let body = bodyFrame
         let center = Geometry.visibleCenter(of: body, in: v)
-        var bodySize = max(body.width, body.height)
+        let bodySize = max(body.width, body.height)
         var roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
         var points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
-        if petView.island != nil {   // 알약: 지금 크기(접힘·펼침)에 맞춰 칸이 알약에 가리지 않을 만큼만 벌린다
-            bodySize = 40
-            let clear = pet.frame.insetBy(dx: -34, dy: -34)
-            repeat {
-                bodySize += 10
-                roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
-                points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
-            } while points.contains(where: clear.contains) && bodySize < 600
+        if petView.island != nil {   // 알약: 접힌 알약 안쪽으로 한 겹 부채꼴
+            roomAbove = false
+            points = Geometry.fanCenters(count: slots.count, dock: dock, pill: body)
         }
         let pad: CGFloat = 70
         let xs = points.map(\.x) + [center.x], ys = points.map(\.y) + [center.y, body.minY - 40]   // 펫 아래 이름표 자리

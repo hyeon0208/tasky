@@ -233,7 +233,7 @@ final class AlertCard {
 
     struct Action { let title: String; let run: () -> Void }
 
-    func show(session: AgentSession, title: String, body: String?, actions: [Action], near petFrame: CGRect, in v: CGRect) {
+    func show(session: AgentSession, title: String, body: String?, actions: [Action], near petFrame: CGRect, in v: CGRect, beside: CGFloat = 0) {
         let state = session.state
         dismiss()
         if Self.soundOn {
@@ -279,9 +279,13 @@ final class AlertCard {
         effect.addSubview(stack)
 
         let shown = petFrame.intersection(v).isNull ? petFrame : petFrame.intersection(v)
-        let x = min(max(shown.midX - width / 2, v.minX + 8), v.maxX - width - 8)
+        var x = min(max(shown.midX - width / 2, v.minX + 8), v.maxX - width - 8)
         let above = shown.maxY + 8 + height <= v.maxY
-        let y = above ? shown.maxY + 8 : max(shown.minY - height - 8, v.minY + 8)
+        var y = above ? shown.maxY + 8 : max(shown.minY - height - 8, v.minY + 8)
+        if beside != 0 {   // 옆에 붙은 알약: 알약 옆(-1 왼쪽, 1 오른쪽)
+            x = beside > 0 ? shown.maxX + 8 : shown.minX - width - 8
+            y = min(max(shown.midY - height / 2, v.minY + 8), v.maxY - height - 8)
+        }
         let p = FloatingPanel(size: CGSize(width: width, height: height))
         p.setFrame(CGRect(x: x, y: y, width: width, height: height), display: false)
         p.contentView = effect
