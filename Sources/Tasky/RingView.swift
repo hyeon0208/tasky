@@ -5,7 +5,28 @@ struct Slot {
     let symbol: String
     /// 숫자 배지(기다리는 작업 수 등)
     var badge: Int? = nil
+    /// 칸 순서 저장용 이름(F21). 빈 문자열이면 옮길 수 없는 칸
+    var id = ""
     let action: () -> Void
+}
+
+/// F21 링 칸 순서(순수 계산, 자체 검사 대상)
+enum RingOrder {
+    static let key = "ringOrder"
+    /// 저장한 순서대로 정렬. 저장에 없는 칸은 기본 순서에서 바로 앞 칸 뒤에 끼우고, 없어진 칸은 무시한다.
+    static func apply(saved: [String], ids: [String]) -> [String] {
+        var out = saved.filter(ids.contains)
+        for (i, id) in ids.enumerated() where !out.contains(id) {
+            let prev = ids[..<i].last(where: out.contains)
+            out.insert(id, at: prev.map { out.firstIndex(of: $0)! + 1 } ?? 0)
+        }
+        return out
+    }
+    static func move<T>(_ a: [T], from: Int, to: Int) -> [T] {
+        var a = a
+        a.insert(a.remove(at: from), at: to)
+        return a
+    }
 }
 
 /// 콩 링. 칸마다 유리 단추를 두고, 클릭·숫자 키·Esc는 이 뷰가 받는다(칸 뷰는 클릭을 넘긴다).
@@ -18,6 +39,8 @@ final class RingView: NSView {
     /// 이름표 하나를 둘 위쪽 끝(펫 몸 아래, 뷰 좌표). 없으면 올린 칸 옆에 둔다.
     var labelTop: CGFloat?
     var onClose: () -> Void = {}
+    /// 칸을 옮기면 새 id 순서(F21). nil이면 옮기기 없음(드롭 변환 링)
+    var onReorder: (([String]) -> Void)?
     private var hovered: Int? { didSet { if hovered != oldValue { hoverChanged(from: oldValue) } } }
     private let radius: CGFloat = 25
     private var buttons: [GlassButton] = []
@@ -35,7 +58,7 @@ final class RingView: NSView {
     private func build() {
         buttons.forEach { $0.removeFromSuperview() }
         buttons = centers.enumerated().map { i, c in
-            let b = GlassButton(diameter: radius * 2, symbol: slots[i].symbol, title: slots[i].title, accent: i == 0, badge: slots[i].badge)
+            let b = GlassButton(diameter: radius * 2, symbol: slots[i].symbol, title: slots[i].title, accent: slots[i].id == "status" || (slots[i].id.isEmpty && i == 0), badge: slots[i].badge)
             b.frame = CGRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2)
             addSubview(b)
             return b
@@ -81,9 +104,9 @@ final class RingView: NSView {
         buttons[i].highlighted = true
         label.text = slots[i].title
         let s = label.fittingSize
-        let c = centers[i]
+        let c = lifted == i ? cursor : centers[i]   // 든 칸은 이름표가 따라간다
         let x: CGFloat, y: CGFloat
-        if let top = labelTop, let o = origin {
+        if let top = labelTop, let o = origin, lifted == nil {
             // 이름표는 하나, 펫 몸 아래 가운데
             x = o.x - s.width / 2
             y = top - s.height
@@ -115,13 +138,141 @@ final class RingView: NSView {
         hovered = index(at: convert(event.locationInWindow, from: nil))
     }
 
+    // MARK: 칸 옮기기 (F21, 시안 C 자석 젤리)
+
+    private var press: (index: Int, at: CGPoint)?
+    private var pressWork: DispatchWorkItem?
+    private var lifted: Int?          // 들고 있는 칸(지금 순서의 자리)
+    private var cursor = CGPoint.zero
+    private var before: [GlassButton] = []   // Esc로 되돌릴 순서
+    private var springs: [(x: Spring, y: Spring, s: Spring)] = []
+    private var mover: Timer?
+
+    // 누르면 0.3초 뒤 들기, 그 전에 떼면 실행(spec 3)
     override func mouseDown(with event: NSEvent) {
-        if let i = index(at: convert(event.locationInWindow, from: nil)) { fire(i) } else { onClose() }
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = index(at: p) else { onClose(); return }
+        press = (i, p)
+        guard onReorder != nil, !slots[i].id.isEmpty else { return }
+        let work = DispatchWorkItem { [weak self] in self?.lift(i) }
+        pressWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let l = lifted { cursor = p; swapIfNear(); if lifted == l { hoverChanged(from: nil) }; return }
+        if let press, hypot(p.x - press.at.x, p.y - press.at.y) > 3 { pressWork?.cancel(); self.press = nil }   // 실수 방지: 아무것도 안 함
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pressWork?.cancel()
+        if lifted != nil { drop(cancel: false); return }
+        let p = convert(event.locationInWindow, from: nil)
+        if let press, index(at: p) == press.index { fire(press.index) }
+        press = nil
+    }
+
+    private var reduce: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    private func lift(_ i: Int) {
+        guard window?.isVisible == true else { return }   // 0.3초 안에 링이 닫혔으면
+        press = nil
+        lifted = i
+        before = buttons
+        cursor = centers[i]
+        hovered = i
+        buttons[i].layer?.removeAnimation(forKey: "hover")
+        springs = centers.map { c in
+            (Spring(value: c.x, stiffness: 320, damping: 14), Spring(value: c.y, stiffness: 320, damping: 14), Spring(value: 1, stiffness: 300, damping: 20))
+        }
+        buttons[i].layer?.zPosition = 10
+        if reduce { buttons[i].layer?.transform = buttons[i].scaled(1.15); return }
+        guard mover == nil else { return }
+        var last = CACurrentMediaTime()
+        mover = Ticker.every("링 칸 옮기기", 1.0 / 60) { [weak self] t in
+            guard let self, self.window?.isVisible == true else { t.invalidate(); return }   // 링이 닫히면(orderOut) 멈춘다
+            let now = CACurrentMediaTime()
+            self.step(min(now - last, 1.0 / 20))
+            last = now
+        }
+    }
+
+    /// 든 칸이 다른 칸 자리 40pt 안이면 순서를 바꾼다(밀려난 칸은 스프링으로 새 자리로)
+    private func swapIfNear() {
+        guard let from = lifted else { return }
+        if reduce { buttons[from].frame.origin = CGPoint(x: cursor.x - radius, y: cursor.y - radius) }
+        guard let to = centers.indices.min(by: { hypot(centers[$0].x - cursor.x, centers[$0].y - cursor.y) < hypot(centers[$1].x - cursor.x, centers[$1].y - cursor.y) }),
+              to != from, hypot(centers[to].x - cursor.x, centers[to].y - cursor.y) < 40, !slots[to].id.isEmpty else { return }
+        hovered = nil   // 바꾸기 전 자리 기준으로 강조를 끈다
+        slots = RingOrder.move(slots, from: from, to: to)
+        buttons = RingOrder.move(buttons, from: from, to: to)
+        if !springs.isEmpty { springs = RingOrder.move(springs, from: from, to: to) }
+        lifted = to
+        hovered = to
+        if reduce { buttons[to].layer?.removeAnimation(forKey: "hover"); buttons[to].layer?.transform = buttons[to].scaled(1.15) }
+        if reduce { for (k, b) in buttons.enumerated() where k != to { b.frame.origin = CGPoint(x: centers[k].x - radius, y: centers[k].y - radius) } }
+    }
+
+    private func drop(cancel: Bool) {
+        guard let i = lifted else { return }
+        let held = buttons[i]
+        hovered = nil
+        if cancel {   // 들기 전 순서로(버튼 자체를 기준으로 되돌림)
+            let perm = before.map { old in buttons.firstIndex { $0 === old }! }
+            slots = perm.map { slots[$0] }
+            if !springs.isEmpty { springs = perm.map { springs[$0] } }
+            buttons = before
+        }
+        held.layer?.zPosition = 0
+        lifted = nil
+        if reduce || mover == nil {
+            for (k, b) in buttons.enumerated() { b.layer?.transform = CATransform3DIdentity; b.frame.origin = CGPoint(x: centers[k].x - radius, y: centers[k].y - radius) }
+        }
+        if !cancel { onReorder?(slots.map(\.id).filter { !$0.isEmpty }) }
+    }
+
+    /// 한 프레임: 든 칸은 커서를 빠르게, 나머지는 살짝 출렁이며 제자리로. 든 칸은 속도 방향으로 늘어난다.
+    private func step(_ dt: Double) {
+        var moving = false
+        for k in buttons.indices {
+            let held = k == lifted
+            let target = held ? cursor : centers[k]
+            if held { springs[k].x.stiffness = 900; springs[k].x.damping = 45; springs[k].y.stiffness = 900; springs[k].y.damping = 45 }
+            else { springs[k].x.stiffness = 320; springs[k].x.damping = 14; springs[k].y.stiffness = 320; springs[k].y.damping = 14 }
+            springs[k].x.step(to: target.x, dt: dt)
+            springs[k].y.step(to: target.y, dt: dt)
+            springs[k].s.step(to: held ? 1.15 : 1, dt: dt)
+            let (x, y, sc) = (springs[k].x, springs[k].y, springs[k].s)
+            let b = buttons[k]
+            b.frame.origin = CGPoint(x: x.value - radius, y: y.value - radius)
+            let speed = hypot(x.velocity, y.velocity), stretch = min(0.45, speed / 2200)
+            let angle = atan2(y.velocity, x.velocity)
+            let c = CGPoint(x: b.bounds.midX, y: b.bounds.midY)
+            var t = CATransform3DMakeTranslation(c.x, c.y, 0)
+            t = CATransform3DRotate(t, angle, 0, 0, 1)
+            t = CATransform3DScale(t, sc.value * (1 + stretch), sc.value * (1 - stretch * 0.6), 1)
+            t = CATransform3DRotate(t, -angle, 0, 0, 1)
+            t = CATransform3DTranslate(t, -c.x, -c.y, 0)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            b.layer?.removeAnimation(forKey: "hover")   // 호버 스프링이 젤리 변형을 덮지 않게
+            b.layer?.transform = t
+            CATransaction.commit()
+            if held || abs(x.value - target.x) > 0.3 || abs(y.value - target.y) > 0.3 || speed > 5 || abs(sc.value - 1) > 0.005 { moving = true }
+        }
+        if !moving { mover?.invalidate(); mover = nil }
+    }
+
+    override func removeFromSuperview() { mover?.invalidate(); pressWork?.cancel(); super.removeFromSuperview() }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { mover?.invalidate(); mover = nil; pressWork?.cancel() }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, lifted != nil { drop(cancel: true); return }   // 들고 있으면 Esc는 되돌리기
         if event.keyCode == 53 { onClose(); return }                 // Esc
-        if let n = Int(event.charactersIgnoringModifiers ?? ""), (1...slots.count).contains(n) { fire(n - 1) }
+        if lifted == nil, let n = Int(event.charactersIgnoringModifiers ?? ""), (1...slots.count).contains(n) { fire(n - 1) }
     }
 
     // MARK: 드롭 변환 링: 파일을 칸 위에 놓으면 그 칸을 실행

@@ -485,6 +485,15 @@ enum SelfTest {
             let top = Geometry.fanCenters(count: 7, dock: .top, pill: Geometry.islandFrame(dock: .top, expanded: false, center: CGPoint(x: 720, y: 900), in: v))
             check(top.allSatisfy { $0.y < 896 - 30 }, "위 알약 링은 아래로")
         }
+        // F21 링 칸 순서
+        do {
+            let ids = ["status", "drawer", "bowl", "clipboard", "settings"]
+            check(RingOrder.apply(saved: [], ids: ids) == ids, "링 순서 저장 없으면 기본")
+            check(RingOrder.apply(saved: ["settings", "status", "drawer", "bowl", "clipboard"], ids: ids) == ["settings", "status", "drawer", "bowl", "clipboard"], "링 순서 저장대로")
+            check(RingOrder.apply(saved: ["drawer", "status", "old", "settings"], ids: ids) == ["drawer", "bowl", "clipboard", "status", "settings"], "링 새 칸은 기본 앞 칸 뒤에, 없어진 칸 무시")
+            check(RingOrder.move([1, 2, 3, 4], from: 0, to: 2) == [2, 3, 1, 4], "링 칸 뒤로 옮기기")
+            check(RingOrder.move([1, 2, 3, 4], from: 3, to: 1) == [1, 4, 2, 3], "링 칸 앞으로 옮기기")
+        }
         // F18 3D 곰: 스프링·모션
         var sp = Spring(stiffness: 120, damping: 14)
         var peak = 0.0

@@ -618,16 +618,21 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             : done > 0 ? Slot(title: "끝난 작업 \(done)", symbol: "checkmark.seal") { [weak self] in self?.openAgentList() }
             : !lastResults.isEmpty ? Slot(title: "변환 결과 보기", symbol: "checkmark.circle") { [weak self] in self?.revealResults() }
             : Slot(title: "쓰다듬기", symbol: "hand.wave") { [weak self] in self?.petRubbed() }
-        return [
-            first,
+        var status = first
+        status.id = "status"
+        let slots = [
+            status,
             // 편지 쓰기·편지함은 F7(보류) 동안 뺀다
-            Slot(title: "폴더 서랍", symbol: "folder") { [weak self] in self?.openDrawer(pinned: false) },
-            Slot(title: "싱잉볼", symbol: "bell") { [weak self] in if let self { self.onBowl?(self) } },
-            Slot(title: "클립보드 (\(HotKey.title()))", symbol: "doc.on.clipboard") { ClipWindow.shared.open() },
-            Slot(title: "작업 알림", symbol: "checklist") { [weak self] in self?.openAgentList() },
-            Slot(title: dock.isDocked ? "빼꼼 그만" : "빼꼼", symbol: "eye") { [weak self] in self?.togglePeek() },
-            Slot(title: "설정", symbol: "gearshape") { [weak self] in self?.openSettings() },
+            Slot(title: "폴더 서랍", symbol: "folder", id: "drawer") { [weak self] in self?.openDrawer(pinned: false) },
+            Slot(title: "싱잉볼", symbol: "bell", id: "bowl") { [weak self] in if let self { self.onBowl?(self) } },
+            Slot(title: "클립보드 (\(HotKey.title()))", symbol: "doc.on.clipboard", id: "clipboard") { ClipWindow.shared.open() },
+            Slot(title: "작업 알림", symbol: "checklist", id: "agents") { [weak self] in self?.openAgentList() },
+            Slot(title: dock.isDocked ? "빼꼼 그만" : "빼꼼", symbol: "eye", id: "peek") { [weak self] in self?.togglePeek() },
+            Slot(title: "설정", symbol: "gearshape", id: "settings") { [weak self] in self?.openSettings() },
         ]
+        // F21: 사용자가 옮긴 순서
+        let order = RingOrder.apply(saved: UserDefaults.standard.stringArray(forKey: RingOrder.key) ?? [], ids: slots.map(\.id))
+        return order.compactMap { id in slots.first { $0.id == id } }
     }
 
     private func openRing(slots: [Slot], acceptsFiles: Bool) {
@@ -660,6 +665,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         view.centers = points.map { CGPoint(x: $0.x - rect.minX, y: $0.y - rect.minY) }
         view.acceptsFiles = acceptsFiles
         view.onClose = { [weak self] in self?.closeRing() }
+        if !acceptsFiles { view.onReorder = { UserDefaults.standard.set($0, forKey: RingOrder.key) } }
         panel.contentView = view
         if acceptsFiles {
             panel.orderFrontRegardless()
@@ -926,6 +932,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 [NSView(), hint("이 키를 누른 채 펫에 커서를 올리면 열려요")],
                 [label("싱잉볼 소리 크기"), bowlSlider],
                 [label("펫 움직임 끄기"), check(Pet3DView.still) { Pet3DView.still = $0 }, hint("3D 곰이 가만히 멈춰 CPU를 아껴요")],
+                [label("원형 메뉴 순서"), ClosureButton("처음대로") { UserDefaults.standard.removeObject(forKey: RingOrder.key) },
+                 hint("칸을 0.3초 꾹 눌러 들고 옮길 수 있어요")],
                 [label("펫 위에 시계"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
                     ClockMode.current = ClockMode.allCases[$0] }],
                 [label("24시간제로 보기"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],
