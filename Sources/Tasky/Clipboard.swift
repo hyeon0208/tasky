@@ -214,7 +214,6 @@ final class ClipWatcher {
 /// 전역 단축키(Carbon, 권한 필요 없음)
 final class HotKey {
     static let shared = HotKey()
-    private var ref: EventHotKeyRef?
     private var handler: EventHandlerRef?
     var onPress: () -> Void = {}
     private(set) var registered = false
@@ -234,22 +233,42 @@ final class HotKey {
     func register() -> Bool {
         unregister()
         guard ClipWatcher.enabled else { return false }
-        if handler == nil {
-            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-                DispatchQueue.main.async { HotKey.shared.onPress() }
-                return noErr
-            }, 1, &spec, nil, &handler)
-        }
-        let id = EventHotKeyID(signature: OSType(0x5441534B), id: 1)   // 'TASK'
-        registered = RegisterEventHotKey(Self.keyCode, Self.modifiers, id, GetApplicationEventTarget(), 0, &ref) == noErr
+        registered = add(id: 1, keyCode: Self.keyCode, modifiers: Self.modifiers) { HotKey.shared.onPress() }
         return registered
     }
 
     func unregister() {
-        if let ref { UnregisterEventHotKey(ref) }
-        ref = nil
+        remove(id: 1)
         registered = false
+    }
+
+    // 여러 단축키(F15 창 정리도 씀): id → 등록·동작
+    private var refs: [UInt32: EventHotKeyRef] = [:]
+    private var actions: [UInt32: () -> Void] = [:]
+
+    /// 등록. 다른 앱이 같은 키를 쓰고 있으면 false.
+    func add(id: UInt32, keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) -> Bool {
+        remove(id: id)
+        if handler == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+                var hk = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
+                let id = hk.id
+                DispatchQueue.main.async { HotKey.shared.actions[id]?() }
+                return noErr
+            }, 1, &spec, nil, &handler)
+        }
+        var ref: EventHotKeyRef?
+        guard RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: OSType(0x5441534B), id: id), GetApplicationEventTarget(), 0, &ref) == noErr, let ref else { return false }   // 'TASK'
+        refs[id] = ref
+        actions[id] = action
+        return true
+    }
+
+    func remove(id: UInt32) {
+        if let r = refs.removeValue(forKey: id) { UnregisterEventHotKey(r) }
+        actions[id] = nil
     }
 
     /// "⌘⇧C" 같은 표시
@@ -259,6 +278,8 @@ final class HotKey {
         if m & UInt32(optionKey) != 0 { s += "⌥" }
         if m & UInt32(shiftKey) != 0 { s += "⇧" }
         if m & UInt32(cmdKey) != 0 { s += "⌘" }
+        let special: [Int: String] = [kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓", kVK_Return: "↩", kVK_Delete: "⌫", kVK_ForwardDelete: "⌦", kVK_Space: "Space", kVK_Escape: "⎋", kVK_Tab: "⇥", kVK_Home: "↖", kVK_End: "↘"]
+        if let k = special[Int(keyCode)] { return s + k }
         let src = TISCopyCurrentASCIICapableKeyboardLayoutInputSource().takeRetainedValue()
         if let ptr = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) {
             let layout = unsafeBitCast(ptr, to: CFData.self)

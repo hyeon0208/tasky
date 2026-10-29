@@ -385,6 +385,33 @@ enum SelfTest {
         check(ClipStore(folder: clipDir).history.items.first?.files == ["/tmp/a.txt"], "기록 저장·읽기")
         try? FileManager.default.removeItem(at: clipDir)
 
+        // F15 창 정리: 영역 계산·순환·가장자리·좌표
+        let area = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let win = CGRect(x: 100, y: 100, width: 500, height: 400)
+        check(SnapMath.rect(.leftHalf, area: area, current: win) == CGRect(x: 0, y: 0, width: 720, height: 900), "창 정리 왼쪽 반")
+        check(SnapMath.rect(.rightHalf, area: area, current: win) == CGRect(x: 720, y: 0, width: 720, height: 900), "창 정리 오른쪽 반")
+        check(SnapMath.rect(.topLeft, area: area, current: win) == CGRect(x: 0, y: 450, width: 720, height: 450), "창 정리 왼쪽 위 4분의 1")
+        check(SnapMath.rect(.centerThird, area: area, current: win) == CGRect(x: 480, y: 0, width: 480, height: 900), "창 정리 가운데 3분의 1")
+        check(SnapMath.rect(.lastTwoThirds, area: area, current: win) == CGRect(x: 480, y: 0, width: 960, height: 900), "창 정리 오른쪽 3분의 2")
+        let shifted = CGRect(x: 1440, y: 25, width: 1920, height: 1055)
+        check(SnapMath.rect(.bottomHalf, area: shifted, current: win) == CGRect(x: 1440, y: 25, width: 1920, height: 527.5), "창 정리 원점이 0이 아닌 화면")
+        var cyc = CGRect.zero, widths: [CGFloat] = []
+        for _ in 0..<4 { cyc = SnapMath.rect(.leftHalf, area: area, current: cyc)!; widths.append(cyc.width) }
+        check(widths == [720, 960, 480, 720], "창 정리 반쪽 순환 1/2→2/3→1/3→1/2 \(widths)")
+        check(!SnapController.displayRect(cur: area, from: area, to: CGRect(x: 1440, y: 0, width: 1280, height: 800)).origin.x.isNaN, "창 정리 최대화 창을 작은 모니터로(NaN 없음)")
+        let scr = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        check(SnapMath.edge(CGPoint(x: 3, y: 450), screen: scr) == .leftHalf, "창 정리 왼쪽 가장자리")
+        check(SnapMath.edge(CGPoint(x: 2, y: 890), screen: scr) == .topLeft, "창 정리 왼쪽 위 모서리")
+        check(SnapMath.edge(CGPoint(x: 720, y: 898), screen: scr) == .maximize, "창 정리 위 가장자리 = 최대화")
+        check(SnapMath.edge(CGPoint(x: 720, y: 450), screen: scr) == nil, "창 정리 가운데는 없음")
+        let upper = CGRect(x: 200, y: 900, width: 800, height: 600)   // 주 화면 위에 놓인 모니터의 창
+        check(SnapMath.flip(SnapMath.flip(upper, primaryHeight: 900), primaryHeight: 900) == upper && SnapMath.flip(upper, primaryHeight: 900).minY == -600, "창 정리 좌표 왕복")
+        let spaceLeft: [(code: UInt32, mods: UInt32)] = [(123, 0x1000)]   // ⌃← (Space 이동)
+        check(SystemHotKeys.conflicts((123, 0x1000), in: spaceLeft), "창 정리 시스템 단축키와 같으면 겹침")
+        check(!SystemHotKeys.conflicts(SnapAction.leftHalf.defaultKey, in: spaceLeft), "창 정리 ⌃⌥←는 ⌃←와 안 겹침")
+        print("시스템 단축키(켜진 것):", SystemHotKeys.load().count, "개, 기본 창 정리 키와 겹침:",
+              SnapAction.allCases.filter { SystemHotKeys.conflicts($0.defaultKey, in: SystemHotKeys.load()) }.map(\.title))
+
         // F14 작업 구슬
         let beadNow = Date()
         func ses(_ id: String, _ st: AgentSession.State, tool: String = "claude", app: String? = nil, seen: Bool = true, ago: Double = 0) -> AgentSession {

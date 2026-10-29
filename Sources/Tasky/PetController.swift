@@ -891,6 +891,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 ]),
             ])),
             SettingsTab(id: "clipboard", title: "클립보드", symbol: "doc.on.clipboard", content: clipboardSettings()),
+            SettingsTab(id: "snap", title: "창 정리", symbol: "rectangle.split.2x1", content: snapSettings()),
         ] + (Debug.isOn ? [SettingsTab(id: "debug", title: "개발자", symbol: "hammer", content: {
                 let d = DebugTab()
                 settingsKeepAlive.append(d)
@@ -937,6 +938,84 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         settingsMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in self?.closeSettings() }
     }
 
+    /// 설정 '창 정리' 탭 (F15)
+    private func snapSettings() -> NSView {
+        func label(_ t: String) -> NSTextField { NSTextField(labelWithString: t) }
+        func note(_ t: String) -> NSTextField {
+            let f = NSTextField(wrappingLabelWithString: t)
+            f.font = .systemFont(ofSize: 11)
+            f.textColor = .secondaryLabelColor
+            f.preferredMaxLayoutWidth = 320
+            return f
+        }
+        func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSButton {
+            let b = ClosureButton("") {}
+            b.setButtonType(.switch)
+            b.title = ""
+            b.state = on ? .on : .off
+            b.handler = { [weak b] in toggle(b?.state == .on) }
+            return b
+        }
+        let status = note("")
+        let openPermission = ClosureButton("권한 열기") {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        }
+        var rows: [(SnapAction, NSButton, NSTextField)] = []
+        func keyTitle(_ a: SnapAction) -> String { a.key.map { HotKey.title(keyCode: $0.code, modifiers: $0.mods) } ?? "없음" }
+        func refresh() {
+            let snap = SnapController.shared
+            let apps = SnapController.runningSnapApps()
+            openPermission.isHidden = !SnapController.enabled || AXIsProcessTrusted()
+            status.stringValue = !SnapController.enabled ? "꺼져 있어요. 켜면 '손쉬운 사용' 권한을 요청해요."
+                : !AXIsProcessTrusted() ? "손쉬운 사용 권한을 기다리고 있어요. 권한을 주면 바로 켜져요."
+                : apps.isEmpty ? "켜져 있어요. 창을 화면 가장자리로 끌어도 맞춰져요."
+                : "\(apps.joined(separator: ", "))이(가) 켜져 있어 같은 단축키는 겹칠 수 있어요."
+            for (a, button, mark) in rows {
+                button.title = keyTitle(a)
+                switch snap.status[a] {
+                case .system?: mark.stringValue = "겹침(시스템)"; mark.textColor = .systemRed
+                case .taken?: mark.stringValue = "겹침(다른 앱)"; mark.textColor = .systemRed
+                case .ours?: mark.stringValue = "겹침(Tasky 안)"; mark.textColor = .systemRed
+                default: mark.stringValue = ""
+                }
+            }
+        }
+        var keyRows: [[NSView]] = []
+        for a in SnapAction.allCases {
+            let mark = NSTextField(labelWithString: "")
+            mark.font = .systemFont(ofSize: 11)
+            let record = ClosureButton(keyTitle(a)) {}
+            record.handler = { [weak self, weak record] in
+                self?.stopKeyRecorder()
+                record?.title = "키를 누르세요…"
+                HotKey.shared.unregister()
+                SnapController.shared.stop()
+                self?.keyRecorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+                    self?.stopKeyRecorder()
+                    // Esc 취소, ⌫만 누르면 지우기. ⌘·⌃·⌥ 중 하나는 있어야 한다
+                    if e.keyCode == 51 && e.modifierFlags.intersection([.command, .control, .option]).isEmpty { a.key = nil }
+                    else if e.keyCode != 53, !e.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+                        a.key = (UInt32(e.keyCode), HotKey.carbonModifiers(e.modifierFlags))
+                    }
+                    SnapController.shared.start()
+                    return nil
+                }
+            }
+            let reset = ClosureButton("기본") { a.key = a.defaultKey; SnapController.shared.start() }
+            rows.append((a, record, mark))
+            keyRows.append([label(a.title), NSStackView(views: [record, reset, mark])])
+        }
+        SnapController.shared.onChange = { refresh() }
+        refresh()
+        return SettingsTabs.grid([(nil, [
+            [label("창 정리"), check(SnapController.enabled) { SnapController.shared.setEnabled($0) }],
+            [NSView(), status],
+            [NSView(), openPermission],
+            [label("끌어서 맞추기"), check(SnapController.dragOn) { SnapController.dragOn = $0 }],
+            [NSView(), note("단축키 버튼을 누르고 새 키를 누르세요. ⌫는 지우기, Esc는 취소예요.")],
+        ] + keyRows)])
+    }
+
     /// 설정 '클립보드' 탭
     private func clipboardSettings() -> NSView {
         func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSButton {
@@ -965,6 +1044,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         record.handler = { [weak self, weak record] in
             self?.stopKeyRecorder()   // 두 번 눌러도 듣는 것은 하나
             record?.title = "키를 누르세요…"
+            HotKey.shared.unregister()
+            SnapController.shared.stop()
             self?.keyRecorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
                 self?.stopKeyRecorder()
                 let mods = HotKey.carbonModifiers(e.modifierFlags)
@@ -1010,12 +1091,18 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     private var keyRecorder: Any?
     private func stopKeyRecorder() {
-        if let m = keyRecorder { NSEvent.removeMonitor(m) }
+        if let m = keyRecorder {
+            NSEvent.removeMonitor(m)
+            // 녹화 동안 멈춘 단축키를 다시 건다(등록된 키는 녹화 칸까지 오지 않음)
+            HotKey.shared.register()
+            SnapController.shared.start()
+        }
         keyRecorder = nil
     }
 
     private func closeSettings() {
         stopKeyRecorder()
+        SnapController.shared.onChange = {}
         if let m = settingsMonitor { NSEvent.removeMonitor(m); settingsMonitor = nil }
         settingsPanel?.orderOut(nil)
         settingsPanel = nil
@@ -1208,6 +1295,7 @@ final class App: NSObject {
         ClipWatcher.shared.apply()
         HotKey.shared.onPress = { ClipWindow.shared.toggle() }
         HotKey.shared.register()
+        SnapController.shared.start()   // F15: 켜져 있을 때만 단축키·마우스 감시
         PerfSampler.shared.update()   // --debug이고 기록이 켜져 있으면 바로 기록 시작
         for e in HookServer.drainSpool() { agents.apply(e, offline: true) }
         server = HookServer { [weak self] e in self?.agents.apply(e) }
