@@ -139,8 +139,16 @@ enum ProceduralBear {
             let m = SCNMaterial()
             m.lightingModel = .physicallyBased
             m.diffuse.contents = c
-            m.roughness.contents = shiny ? 0.15 : 0.62
+            m.roughness.contents = shiny ? 0.15 : 0.95
             m.metalness.contents = 0
+            if !shiny {
+                // 말랑한 인형 느낌: 테두리를 살짝 밝히고(벨벳), 어두운 쪽을 들어 올려 그림자를 부드럽게
+                m.shaderModifiers = [.fragment: """
+                float rim = 1.0 - saturate(dot(_surface.normal, normalize(-_surface.position)));
+                _output.color.rgb = mix(_output.color.rgb, _surface.diffuse.rgb, 0.35);
+                _output.color.rgb += _surface.diffuse.rgb * pow(rim, 2.5) * 0.35;
+                """]
+            }
             return m
         }
         func ball(_ r: CGFloat, _ m: SCNMaterial, scale: SCNVector3 = SCNVector3(1, 1, 1), at p: SCNVector3, name: String? = nil) -> SCNNode {
@@ -237,12 +245,12 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         scene.rootNode.addChildNode(cam)
         let key = SCNNode(); key.light = SCNLight()
         key.light?.type = .directional
-        key.light?.intensity = 900
+        key.light?.intensity = 650
         key.eulerAngles = SCNVector3(-0.7, 0.5, 0)
         scene.rootNode.addChildNode(key)
         let fill = SCNNode(); fill.light = SCNLight()
         fill.light?.type = .ambient
-        fill.light?.intensity = 520
+        fill.light?.intensity = 700
         fill.light?.color = NSColor(srgbRed: 1, green: 0.97, blue: 0.94, alpha: 1)
         scene.rootNode.addChildNode(fill)
         self.scene = scene
