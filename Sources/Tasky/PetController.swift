@@ -1003,11 +1003,17 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         effect.addSubview(tabView)
 
         let v = (pet.isVisible ? screen : NSScreen.main ?? screen).visibleFrame
-        let shown = pet.frame.intersection(v).isNull ? pet.frame : pet.frame.intersection(v)
-        // 펫 위, 안 되면 아래, 둘 다 넘치면 화면 가운데
-        let x = min(max(shown.midX - size.width / 2, v.minX + 8), v.maxX - size.width - 8)
-        let y = shown.maxY + 8 + size.height <= v.maxY ? shown.maxY + 8
+        // 알약은 접힌 크기 기준(펼친 채 열어도 접히면 붙어 있게)
+        let petFrame = dock.isDocked ? Geometry.islandFrame(dock: dock, expanded: false, center: CGPoint(x: pet.frame.midX, y: pet.frame.midY), in: v) : pet.frame
+        let shown = petFrame.intersection(v).isNull ? petFrame : petFrame.intersection(v)
+        // 펫 위, 안 되면 아래, 둘 다 넘치면 화면 가운데. 옆에 붙은 알약은 알약 옆에(알약이 설정 창을 가리지 않게)
+        var x = min(max(shown.midX - size.width / 2, v.minX + 8), v.maxX - size.width - 8)
+        var y = shown.maxY + 8 + size.height <= v.maxY ? shown.maxY + 8
             : shown.minY - size.height - 8 >= v.minY ? shown.minY - size.height - 8 : v.midY - size.height / 2
+        if dock.isDocked && dock != .top && dock != .bottom {
+            x = dock.mirrored ? shown.maxX + 8 : shown.minX - size.width - 8
+            y = min(max(shown.midY - size.height / 2, v.minY + 8), v.maxY - size.height - 8)
+        }
         let origin = pet.isVisible ? CGPoint(x: x, y: y) : CGPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2)   // 펫이 숨어 있으면 화면 가운데
         let panel = FloatingPanel(size: size)
         panel.keyable = true
