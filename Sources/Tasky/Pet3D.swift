@@ -259,7 +259,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         wantsLayer = true
         layer?.isOpaque = false
         antialiasingMode = .multisampling4X
-        preferredFramesPerSecond = 30
+        preferredFramesPerSecond = 60   // 30이면 움직임이 끊겨 보인다(사용자 확인). 졸 때만 30
         rendersContinuously = true
         delegate = self
         for name in [BearRig.body, BearRig.head, BearRig.earL, BearRig.earR, BearRig.eyeL, BearRig.eyeR, BearRig.armL, BearRig.armR, BearRig.tail] {
@@ -332,7 +332,11 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     func advance(_ dt: Double, look: CGPoint) {
         lock.lock(); defer { lock.unlock() }
         time += dt
-        if let k = pendingKick { pendingKick = nil; started = time; kick(k) }
+        if let k = pendingKick {
+            pendingKick = nil; started = time; kick(k)
+            let calm = k == .sleepy || k == .rest
+            DispatchQueue.main.async { [weak self] in self?.preferredFramesPerSecond = calm ? 30 : 60 }
+        }
         let situation = _situation, lean = _lean, facingRight = _facingRight
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         var p = BearMotion.pose(situation, t: time - started, look: look, lean: lean, facingRight: facingRight, reduce: reduce)
