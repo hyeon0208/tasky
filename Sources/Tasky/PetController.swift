@@ -122,6 +122,10 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 guard let self, self.petView.base == .idle, Interaction.isSleepy(last: self.lastInteraction) else { return }
                 self.petView.react(.sleepy)
             },
+            Ticker.every("알약 시계 갱신", 15) { [weak self] _ in   // 펼친 알약의 분 단위 시계
+                guard let self, let i = self.petView.island, i.expanded else { return }
+                self.petView.island = self.islandContent(expanded: true)
+            },
         ]
     }
 
@@ -162,14 +166,51 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     }
 
     private func place(animated: Bool, out: CGFloat = 0) {
-        let f = Geometry.frame(size: petSize, origin: origin, dock: dock, in: screen.visibleFrame, out: out, body: petView.bodyUnit)
+        let f: CGRect
+        if dock.isDocked {   // F20: 붙으면 펫 창이 알약이 된다. 호버(out)·새 알림이면 펼침
+            let expanded = out > 0 || alertOpen
+            petView.island = islandContent(expanded: expanded)
+            let c = CGPoint(x: origin.x + petSize.width / 2, y: origin.y + petSize.height / 2)
+            f = Geometry.islandFrame(dock: dock, expanded: expanded, center: c, in: screen.visibleFrame)
+        } else {
+            petView.island = nil
+            f = Geometry.frame(size: petSize, origin: origin, dock: dock, in: screen.visibleFrame, out: out, body: petView.bodyUnit)
+        }
         petView.mirrored = dock.mirrored
         if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            NSAnimationContext.runAnimationGroup { $0.duration = 0.22; pet.animator().setFrame(f, display: true) }
+            NSAnimationContext.runAnimationGroup {
+                $0.duration = dock.isDocked ? 0.2 : 0.22
+                $0.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                pet.animator().setFrame(f, display: true)
+            }
         } else {
             pet.setFrame(f, display: true)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.25 : 0)) { [weak self] in self?.placeClock(); self?.placeBeads() }
+        // 붙으면 시계·구슬은 알약 안에 있으므로 숨기고, 떨어지면 다시
+        DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.25 : 0)) { [weak self] in self?.updateClock(); self?.updateBeads() }
+    }
+
+    /// 새 알림으로 잠깐 펼친 상태와 알약 테두리 색(커서를 올리면 지운다)
+    private var alertOpen = false
+    private var alertBorder: NSColor?
+    private var alertOpenID = 0
+
+    /// 알약 내용: 작업 색 점(급한 순 3개 + 나머지 수), 시계, 가장 급한 작업 한 줄
+    private func islandContent(expanded: Bool) -> PetView.Island {
+        let rank: [AgentSession.State: Int] = [.waiting: 0, .failed: 1, .done: 2, .working: 3]
+        let shown = (agents?.ordered ?? []).filter { accepts($0.tool) && ($0.state != .done || !$0.seen) }
+            .sorted { rank[$0.state]! < rank[$1.state]! }
+        var i = PetView.Island(vertical: dock != .bottom, expanded: expanded, dots: shown.prefix(3).map { $0.state.color },
+                               extra: max(shown.count - 3, 0), clock: ClockMode.text(Date(), seconds: false), border: alertBorder)
+        guard let top = shown.first else { i.line = "쉬는 중"; i.lineColor = .secondaryLabelColor; return i }
+        i.lineColor = top.state.color
+        switch top.state {
+        case .waiting: i.line = "\(top.name) 내 차례"
+        case .failed: i.line = "\(top.name) 실패"
+        case .done: i.line = "\(top.name) 끝남"
+        case .working: i.line = "일하는 중 \(shown.count)개"
+        }
+        return i
     }
 
     func petDragged(by delta: CGVector) {
@@ -179,6 +220,16 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             stopMoving()   // 던지기·걷기 중에 잡으면 그 자리에서 멈춘다
             tossID += 1
             petView.react(.drag)
+            if dock.isDocked {   // 알약을 잡으면 보통 펫 크기로 돌아와 커서 아래에 온다
+                dock = .free
+                hoverWork?.cancel()
+                petView.island = nil
+                let m = NSEvent.mouseLocation, s = petSize
+                stopMoving()   // 펼침 애니메이션이 돌고 있으면 멈춘다
+                pet.setFrame(CGRect(x: m.x - s.width / 2, y: m.y - s.height / 2, width: s.width, height: s.height), display: true)
+                dragOrigin = CGPoint(x: pet.frame.minX - delta.dx, y: pet.frame.minY - delta.dy)
+                lastDragDelta = .zero
+            }
         }
         if dragOrigin == nil { dragOrigin = pet.frame.origin; lastDragDelta = .zero }
         let step = CGVector(dx: delta.dx - lastDragDelta.dx, dy: delta.dy - lastDragDelta.dy)
@@ -264,6 +315,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             }
         }
         guard dock.isDocked, ring == nil, drawer == nil else { return }
+        if inside { alertBorder = nil }
         if inside {
             let work = DispatchWorkItem { [weak self] in self?.place(animated: true, out: 1) }
             hoverWork = work
@@ -343,7 +395,20 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         petView.beans = BeadsSetting.on ? [] : agents.ordered.filter { accepts($0.tool) }.prefix(5).map { $0.state.color }
         updateBeads()
         agentList?.reload()
+        if let i = petView.island { petView.island = islandContent(expanded: i.expanded) }
         guard announce, let s, pet.isVisible, s.state != .working else { return }
+        if dock.isDocked {   // 알약: 상태 색 테두리 + 3초 펼침
+            alertBorder = s.state.color
+            alertOpen = true
+            alertOpenID += 1
+            let id = alertOpenID
+            place(animated: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.alertOpenID == id else { return }
+                self.alertOpen = false
+                if !self.hovering, self.dock.isDocked, self.ring == nil, self.drawer == nil { self.place(animated: true) }
+            }
+        }
         petView.react(s.state == .waiting ? .jobWaiting : s.state == .failed ? .jobFailed : .jobDone)
         var title: String
         var body = s.summary
@@ -407,7 +472,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var hovering = false
 
     private func updateClock() {
-        let show = pet.isVisible && (ClockMode.current == .always || (ClockMode.current == .hover && hovering))
+        let show = pet.isVisible && !dock.isDocked && (ClockMode.current == .always || (ClockMode.current == .hover && hovering))
         guard show else { hideClock(); return }
         if clock == nil { showClock() }
         clock?.label.stringValue = ClockMode.text(Date())   // 설정을 바꾸면 바로 반영
@@ -449,7 +514,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     }
 
     private func updateBeads() {
-        guard BeadsSetting.on, pet.isVisible, let agents else { hideBeads(); return }
+        guard BeadsSetting.on, pet.isVisible, !dock.isDocked, let agents else { hideBeads(); return }
         let beads = BeadModel.beads(sessions: agents.ordered, converting: convertingCount,
                                     frontApp: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, accepts: accepts)
         if beads.isEmpty { hideBeads(); return }
@@ -577,7 +642,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let v = screen.visibleFrame
         let body = bodyFrame
         let center = Geometry.visibleCenter(of: body, in: v)
-        let bodySize = max(body.width, body.height)
+        let bodySize = petView.island == nil ? max(body.width, body.height) : 80   // 알약은 펼쳐져도 링 크기 그대로
         let roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
         let points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
         let pad: CGFloat = 70

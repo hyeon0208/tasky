@@ -51,6 +51,30 @@ final class PetView: NSView {
     var isSquare: Bool { bear != nil || character?.resolve(.idle) != nil }
     var mirrored = false { didSet { needsDisplay = true } }
 
+    /// F20 빼꼼 아일랜드: 붙었을 때 펫 창이 되는 알약의 내용. nil이면 보통 펫.
+    struct Island: Equatable {
+        var vertical: Bool, expanded: Bool
+        var dots: [NSColor] = [], extra = 0
+        var clock = "", line = "", lineColor: NSColor = .white
+        var border: NSColor?
+    }
+    var island: Island? {
+        didSet {
+            guard island != oldValue else { return }
+            bear?.compact = island != nil
+            effectLayer.isHidden = island != nil
+            needsLayout = true
+            needsDisplay = true
+        }
+    }
+    /// 캐릭터가 그려지는 자리: 보통은 창 전체, 알약이면 작은 얼굴 칸
+    private var iconRect: CGRect {
+        guard let i = island else { return bounds }
+        if i.vertical && !i.expanded { return CGRect(x: (bounds.width - 36) / 2, y: bounds.height - 40, width: 36, height: 36) }
+        let s: CGFloat = i.expanded ? (i.vertical ? 52 : 48) : 36
+        return CGRect(x: max(4, min(8, (bounds.height - s) / 2)), y: bounds.midY - s / 2, width: s, height: s)
+    }
+
 
     /// 내 차례 구슬 쪽으로 몸을 살짝 기울인다(-1 왼쪽 … 1 오른쪽, 0 똑바로). 동작 줄이기면 기울이지 않는다.
     func lean(_ toward: CGFloat) {
@@ -127,11 +151,13 @@ final class PetView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        bodyLayer.bounds = bounds
-        bodyLayer.position = CGPoint(x: bounds.midX, y: 0)
+        let r = iconRect
+        bear?.frame = r
+        bodyLayer.bounds = CGRect(origin: .zero, size: r.size)
+        bodyLayer.position = CGPoint(x: r.midX, y: r.minY)
         faceLayer.bounds = bodyLayer.bounds   // 뒤집힌 상태에서도 맞도록 frame 대신 bounds·position
         // 그림의 바닥선(아래 12%)이 창 아래에 오도록 내린다
-        faceLayer.position = CGPoint(x: bounds.midX, y: bounds.midY - bounds.height * Self.floor)
+        faceLayer.position = CGPoint(x: r.width / 2, y: r.height / 2 - r.height * Self.floor)
         let e = bounds.width * 0.26
         effectLayer.frame = CGRect(x: bounds.width * 0.7, y: bounds.height * 0.72, width: e, height: e)
         CATransaction.commit()
@@ -161,11 +187,15 @@ final class PetView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
+        if let island { drawIsland(island) }
         guard faceLayer.contents == nil, bear == nil else { return }   // 캐릭터 그림·3D면 콩깍지를 그리지 않는다
         let ctx = NSGraphicsContext.current!.cgContext
-        if mirrored { ctx.translateBy(x: bounds.width, y: 0); ctx.scaleBy(x: -1, y: 1) }
+        // 알약 안에서는 얼굴 칸에 콩깍지 비율(120×84)로
+        let r = island == nil ? bounds : iconRect.insetBy(dx: 0, dy: iconRect.height * 0.15)
+        ctx.translateBy(x: r.minX, y: r.minY)
+        if mirrored { ctx.translateBy(x: r.width, y: 0); ctx.scaleBy(x: -1, y: 1) }
         // 기준 크기(120×84)로 그리고 펫 크기에 맞춰 늘린다
-        ctx.scaleBy(x: bounds.width / 120, y: bounds.height / 84)
+        ctx.scaleBy(x: r.width / 120, y: r.height / 84)
         let body = CGRect(x: 0, y: 0, width: 120, height: 84).insetBy(dx: 8, dy: 12)
         let pod = NSBezierPath(roundedRect: body, xRadius: body.height / 2, yRadius: body.height / 2)
         bodyColor.setFill()
@@ -216,6 +246,44 @@ final class PetView: NSView {
         mouth.lineWidth = 1.8
         mouth.lineCapStyle = .round
         mouth.stroke()
+    }
+
+    /// 검은 알약 + (접힘) 작업 색 점 / (펼침) 시계·작업 한 줄
+    private func drawIsland(_ i: Island) {
+        let r = bounds.insetBy(dx: 1, dy: 1), radius = min(r.width, r.height, 44) / 2
+        let pill = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
+        NSColor(white: 0.08, alpha: 0.94).setFill()
+        pill.fill()
+        if let b = i.border { b.setStroke(); pill.lineWidth = 2; pill.stroke() }
+        let icon = iconRect
+        if i.expanded {
+            let x = icon.maxX + 10, w = bounds.width - x - 12
+            let para = NSMutableParagraphStyle()
+            para.lineBreakMode = .byTruncatingTail
+            NSAttributedString(string: i.clock, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold),
+                                                            .foregroundColor: NSColor.white])
+                .draw(in: CGRect(x: x, y: bounds.midY + 1, width: w, height: 20))
+            NSAttributedString(string: i.line, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                                                           .foregroundColor: i.lineColor, .paragraphStyle: para])
+                .draw(in: CGRect(x: x, y: bounds.midY - 17, width: w, height: 15))
+            return
+        }
+        let d: CGFloat = 7, step: CGFloat = 12
+        func spot(_ k: Int) -> CGPoint {
+            i.vertical ? CGPoint(x: bounds.midX, y: icon.minY - 10 - CGFloat(k) * step)
+                       : CGPoint(x: icon.maxX + 10 + CGFloat(k) * step, y: bounds.midY)
+        }
+        for (k, c) in i.dots.enumerated() {
+            let p = spot(k)
+            c.setFill()
+            NSBezierPath(ovalIn: CGRect(x: p.x - d / 2, y: p.y - d / 2, width: d, height: d)).fill()
+        }
+        if i.extra > 0 {
+            let t = NSAttributedString(string: "+\(i.extra)", attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .semibold),
+                                                                         .foregroundColor: NSColor(white: 1, alpha: 0.7)])
+            let p = spot(i.dots.count), sz = t.size()
+            t.draw(at: CGPoint(x: i.vertical ? p.x - sz.width / 2 : p.x - 3, y: p.y - sz.height / 2))
+        }
     }
 
     // MARK: 캐릭터 (F11)
@@ -351,6 +419,7 @@ extension PetView {
 
     /// 창 안에서 몸이 차지하는 부분(0...1). 캐릭터는 그림을 바닥선만큼 내려 그린 만큼 옮긴다.
     var bodyUnit: CGRect {
+        if island != nil { return CGRect(x: 0, y: 0, width: 1, height: 1) }   // 알약 전체가 몸
         if bear != nil { return Pet3DView.bodyUnit }
         guard let character, character.resolve(.idle) != nil else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
         let b = character.bodyRect.offsetBy(dx: 0, dy: -Self.floor)

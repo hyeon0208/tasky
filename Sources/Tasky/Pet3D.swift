@@ -251,11 +251,9 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         bear.pivot = SCNMatrix4MakeTranslation(0, Self.center, 0)
         bear.position.y = Self.center
         scene.rootNode.addChildNode(bear)
-        let cam = SCNNode()
         cam.camera = SCNCamera()
         cam.camera?.fieldOfView = 22
-        cam.position = SCNVector3(0, 0.95, 4)
-        cam.look(at: SCNVector3(0, 0.66, 0))
+        aim()
         scene.rootNode.addChildNode(cam)
         let key = SCNNode(); key.light = SCNLight()
         key.light?.type = .directional
@@ -352,6 +350,19 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         advance(dt, look: CGPoint(x: min(max((m.x - f.midX) / 400, -1), 1), y: min(max((m.y - f.midY) / 400, -1), 1)))
     }
 
+    /// F20 알약 안: 얼굴 가까이 비추고 몸은 움직이지 않는다(고개·눈·귀만)
+    private let cam = SCNNode()
+    private var _compact = false
+    var compact: Bool {
+        get { lock.withLock { _compact } }
+        set { lock.withLock { _compact = newValue }; aim() }
+    }
+    private func aim() {
+        let c = compact
+        cam.position = c ? SCNVector3(0, 0.98, 3.3) : SCNVector3(0, 0.95, 4)
+        cam.look(at: SCNVector3(0, c ? 0.86 : 0.66, 0))
+    }
+
     /// 시간을 dt만큼 진행하고 노드에 자세를 입힌다(그리기 루프·그림 확인용 공용)
     func advance(_ dt: Double, look: CGPoint) {
         lock.lock(); defer { lock.unlock() }
@@ -366,6 +377,11 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         var p = BearMotion.pose(situation, t: time - started, look: look, lean: lean, facingRight: facingRight, reduce: reduce)
         // 평소 눈 깜빡임(3~6초마다 0.12초)
+        if _compact {
+            let head = p
+            p = BearPose()
+            (p.headYaw, p.headPitch, p.ears, p.eyes) = (head.headYaw, head.headPitch, head.ears, head.eyes)
+        }
         if !still, time >= nextBlink { if time > nextBlink + 0.12 { nextBlink = time + .random(in: 3...6) } else if p.eyes > 0.5 { p.eyes = 0.1 } }
 
         let squash = follow("squash", p.squash, dt)
@@ -408,8 +424,9 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
     static func renderSamples(to dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let r = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
-        for (s, t) in [(Situation.idle, 1.0), (.pet, 0.3), (.drag, 0.6), (.land, 0.08), (.sleepy, 1.5), (.jobWaiting, 0.4), (.jobFailed, 1.0), (.sulk, 1.5), (.walk, 0.2), (.fileNear, 1.0), (.toss, 0.17), (.toss, 0.35)] {
+        for (s, t, compact) in [(Situation.idle, 1.0), (.pet, 0.3), (.drag, 0.6), (.land, 0.08), (.sleepy, 1.5), (.jobWaiting, 0.4), (.jobFailed, 1.0), (.sulk, 1.5), (.walk, 0.2), (.fileNear, 1.0), (.toss, 0.17), (.toss, 0.35), (.drag, 0.6)].enumerated().map({ ($1.0, $1.1, $0 == 12) }) {
             let v = Pet3DView(frame: CGRect(x: 0, y: 0, width: 240, height: 240))
+            v.compact = compact   // 마지막 한 장: F20 알약 안(끌기 중이어도 몸은 가만히)
             v.nextBlink = 99
             if s == .land { v.situation = .drag; for _ in 0..<30 { v.advance(1.0 / 60, look: .zero) } }
             v.situation = s
@@ -418,7 +435,7 @@ final class Pet3DView: SCNView, SCNSceneRendererDelegate {
             r.pointOfView = v.pointOfView
             let img = r.snapshot(atTime: 0, with: CGSize(width: 240, height: 240), antialiasingMode: .multisampling4X)
             if let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-                try? png.write(to: dir.appendingPathComponent(s == .toss ? "toss\(Int(t * 100)).png" : "\(s).png"))
+                try? png.write(to: dir.appendingPathComponent(compact ? "compact.png" : s == .toss ? "toss\(Int(t * 100)).png" : "\(s).png"))
             }
         }
     }

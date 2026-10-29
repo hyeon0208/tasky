@@ -50,6 +50,35 @@ enum Geometry {
         return CGRect(x: x, y: y, width: size.width, height: size.height)
     }
 
+    /// F20 빼꼼 아일랜드: 붙은 펫 창이 되는 알약. 옆·구석은 세로, 아래는 가로.
+    static func islandSize(dock: Dock, expanded: Bool) -> CGSize {
+        switch (dock == .bottom, expanded) {
+        case (true, false): CGSize(width: 104, height: 44)
+        case (true, true): CGSize(width: 240, height: 64)
+        case (false, false): CGSize(width: 44, height: 104)
+        case (false, true): CGSize(width: 210, height: 112)
+        }
+    }
+
+    /// 화면 끝에서 4pt 안쪽. 펼쳐도 같은 끝에 붙은 채 안쪽으로 커진다. `center`는 붙기 전 펫 가운데(끝을 따라가는 자리).
+    static func islandFrame(dock: Dock, expanded: Bool, center c: CGPoint, in v: CGRect) -> CGRect {
+        let inset: CGFloat = 4
+        var s = islandSize(dock: dock, expanded: expanded)
+        s = CGSize(width: min(s.width, v.width - inset * 2), height: min(s.height, v.height - inset * 2))
+        let clampX = min(max(c.x - s.width / 2, v.minX + inset), v.maxX - inset - s.width)
+        let clampY = min(max(c.y - s.height / 2, v.minY + inset), v.maxY - inset - s.height)
+        let left = v.minX + inset, right = v.maxX - inset - s.width, low = min(v.minY + 40, v.maxY - inset - s.height)
+        let o: CGPoint = switch dock {
+        case .left: CGPoint(x: left, y: clampY)
+        case .right: CGPoint(x: right, y: clampY)
+        case .bottom: CGPoint(x: clampX, y: v.minY + inset)
+        case .bottomLeft: CGPoint(x: left, y: low)
+        case .bottomRight: CGPoint(x: right, y: low)
+        case .free: CGPoint(x: clampX, y: clampY)
+        }
+        return CGRect(origin: o, size: s)
+    }
+
     /// 링의 칸 중심점. 자유 상태는 위쪽 반원(첫 칸이 왼쪽 끝), 가장자리는 반원, 구석은 부채꼴이며 넘치면 바깥 겹으로.
     /// `size`는 펫 몸의 크기. 몸이 클수록 첫 겹이 바깥으로 물러난다(칸끼리 겹치지 않는 최소 반지름은 지킨다).
     static func slotCenters(count: Int, dock: Dock, center c: CGPoint, size: CGFloat = 80, roomAbove: Bool = true) -> [CGPoint] {
@@ -385,6 +414,28 @@ enum SelfTest {
         check(ClipStore(folder: clipDir).history.items.first?.files == ["/tmp/a.txt"], "기록 저장·읽기")
         try? FileManager.default.removeItem(at: clipDir)
 
+        // F20 빼꼼 아일랜드
+        do {
+            let v = CGRect(x: 0, y: 0, width: 1440, height: 900), c = CGPoint(x: 30, y: 450)
+            check(Geometry.islandFrame(dock: .left, expanded: false, center: c, in: v) == CGRect(x: 4, y: 398, width: 44, height: 104), "아일랜드 왼쪽 접힘")
+            let e = Geometry.islandFrame(dock: .left, expanded: true, center: c, in: v)
+            check(e.minX == 4 && e.size == CGSize(width: 210, height: 112), "아일랜드 왼쪽 펼침은 같은 끝")
+            let r = Geometry.islandFrame(dock: .right, expanded: true, center: CGPoint(x: 1400, y: 450), in: v)
+            check(r.maxX == 1436, "아일랜드 오른쪽 펼침은 오른쪽 끝")
+            let b = Geometry.islandFrame(dock: .bottom, expanded: true, center: CGPoint(x: 720, y: 10), in: v)
+            check(b.minY == 4 && b.midX == 720 && b.size == CGSize(width: 240, height: 64), "아일랜드 아래 가로")
+            let bl = Geometry.islandFrame(dock: .bottomLeft, expanded: false, center: .zero, in: v)
+            check(bl.minX == 4 && bl.minY == 40 && bl.height == 104, "구석은 옆 세로 알약, 아래 40pt")
+            let top = Geometry.islandFrame(dock: .right, expanded: true, center: CGPoint(x: 1400, y: 899), in: v)
+            check(top.maxY == 896, "아일랜드 위쪽 끝 안")
+            let small = CGRect(x: 0, y: 0, width: 1024, height: 640)
+            for d in [Dock.left, .right, .bottom, .bottomLeft, .bottomRight] {
+                for ex in [false, true] {
+                    let f = Geometry.islandFrame(dock: d, expanded: ex, center: CGPoint(x: 2000, y: -50), in: small)
+                    check(small.contains(f), "아일랜드 작은 화면 안 \(d) \(ex)")
+                }
+            }
+        }
         // F18 3D 곰: 스프링·모션
         var sp = Spring(stiffness: 120, damping: 14)
         var peak = 0.0
