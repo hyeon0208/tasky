@@ -64,7 +64,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var outsideClickMonitor: Any?
     private var dragEndTimer: Timer?
     private var bubble: FloatingPanel?
-    private let onRemove: (PetController) -> Void
 
     private var drawer: FloatingPanel?
     private var drawerContent: DrawerController?
@@ -79,9 +78,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var convertingCount = 0 { didSet { updateBeads() } }
 
     /// `index`는 몇 번째 펫인지. 색과, 처음 놓일 자리를 조금씩 비키는 데 쓴다.
-    init(id: String, index: Int, onAdd: @escaping () -> Void, onRemove: @escaping (PetController) -> Void) {
+    init(id: String, index: Int) {
         self.id = id
-        self.onRemove = onRemove
         initialColor = index
         pet = FloatingPanel(size: CGSize(width: 120, height: 84))
         petView = PetView(frame: CGRect(origin: .zero, size: CGSize(width: 120, height: 84)))
@@ -91,9 +89,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         petView.bodyColor = bodyColor
         applyCharacter()
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem("새 펫 부르기", onAdd))
-        menu.addItem(ClosureMenuItem("이 펫 보내기") { [weak self] in self.map(onRemove) })
-        menu.addItem(.separator())
         let alertsItem = NSMenuItem(title: "작업 알림 받기", action: nil, keyEquivalent: "")
         for (value, title) in Self.alertTools {
             let item = ClosureMenuItem(title) { [weak self] in self?.alertTool = value }
@@ -127,24 +122,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 self.petView.island = self.islandContent(expanded: true)
             },
         ]
-    }
-
-    /// 펫을 화면에서 치우고 저장한 위치를 지운다.
-    func dismiss() {
-        hideClock()
-        beadsPanel?.orderOut(nil)
-        beadsPanel = nil
-        briefingWindow?.close()
-        closeRing()
-        closeDrawer()
-        closeAgentList()
-        closeSettings()
-        hoverKeyTimer?.invalidate()
-        lifeTimers.forEach { $0.invalidate() }
-        petView.character = nil
-        bubble?.orderOut(nil)
-        pet.orderOut(nil)
-        for key in ["dock", "originX", "originY", "screen"] { UserDefaults.standard.removeObject(forKey: "pet.\(id).\(key)") }
     }
 
     func setVisible(_ visible: Bool) {
@@ -1356,7 +1333,7 @@ final class App: NSObject {
         counter = UserDefaults.standard.integer(forKey: "petCounter")
         super.init()
         let ids = UserDefaults.standard.stringArray(forKey: "pets") ?? []
-        for id in ids { spawn(id: id) }
+        if let id = ids.first { spawn(id: id) }   // 펫은 한 마리(사용자 결정 2026-10-30). 예전에 부른 다른 펫은 띄우지 않는다
         if pets.isEmpty { addPet() }
         if App.petsHidden { pets.forEach { $0.setVisible(false) } }
         setUpStatusItem()
@@ -1413,9 +1390,7 @@ final class App: NSObject {
         let index = counter
         counter += 1
         UserDefaults.standard.set(counter, forKey: "petCounter")
-        let pet = PetController(id: id, index: index,
-                                onAdd: { [weak self] in self?.addPet() },
-                                onRemove: { [weak self] in self?.remove($0) })
+        let pet = PetController(id: id, index: index)
         pet.agents = agents
         pet.onBowl = { [weak self] in self?.openBowl(from: $0) }
         pet.neighbors = { [weak self] in self?.pets ?? [] }
@@ -1483,12 +1458,6 @@ final class App: NSObject {
         return pets.first { $0.isVisible } ?? pets.first
     }
 
-    private func remove(_ pet: PetController) {
-        pet.dismiss()
-        pets.removeAll { $0 === pet }
-        saveList()
-    }
-
     private func saveList() { UserDefaults.standard.set(pets.map(\.id), forKey: "pets") }
 
     private func setUpStatusItem() {
@@ -1503,7 +1472,6 @@ final class App: NSObject {
         logo?.accessibilityDescription = "Tasky"
         statusItem.button?.image = logo
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem("새 펫 부르기") { [weak self] in self?.addPet() })
         let sound = ClosureMenuItem("작업 알림음") {}
         sound.state = AlertCard.soundOn ? .on : .off
         sound.handler = { [weak sound] in
