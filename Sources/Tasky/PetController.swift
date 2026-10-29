@@ -1332,6 +1332,10 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 final class App: NSObject {
     private var pets: [PetController] = []
     private var statusItem: NSStatusItem!
+    private var statusMenu = NSMenu()
+    private var bearIcon: NSImage?
+    private var awakeItem: NSMenuItem?
+    private var steamTimer: Timer?
     private var counter: Int
 
     private let agents = AgentStore()
@@ -1469,7 +1473,7 @@ final class App: NSObject {
     private func saveList() { UserDefaults.standard.set(pets.map(\.id), forKey: "pets") }
 
     private func setUpStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // 앱 아이콘의 곰 윤곽(흑백 템플릿, 다크 모드에서 자동 반전). 없으면 체크 기호.
         // Bundle.module은 묶음을 못 찾으면 앱을 멈추므로 직접 찾는다(.build 밖으로 옮겨도 안전)
         let res = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0?.appendingPathComponent("Tasky_Tasky.bundle") }
@@ -1479,7 +1483,18 @@ final class App: NSObject {
         logo?.size = NSSize(width: 18, height: 18)
         logo?.accessibilityDescription = "Tasky"
         statusItem.button?.image = logo
-        let menu = NSMenu()
+        bearIcon = logo
+        let menu = statusMenu
+        // F23 잠 안 자기: 고르면 그 시간으로 바로 켜진다
+        let awake = NSMenuItem(title: "잠 안 자기", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        for c in Awake.choices { sub.addItem(ClosureMenuItem(c.title) { Awake.shared.start(minutes: c.minutes) }) }
+        sub.addItem(.separator())
+        sub.addItem(ClosureMenuItem("끄기") { Awake.shared.stop() })
+        awake.submenu = sub
+        menu.addItem(awake)
+        awakeItem = awake
+        menu.addItem(.separator())
         let sound = ClosureMenuItem("작업 알림음") {}
         sound.state = AlertCard.soundOn ? .on : .off
         sound.handler = { [weak sound] in
@@ -1509,7 +1524,45 @@ final class App: NSObject {
         menu.addItem(settings)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Tasky 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        statusItem.menu = menu
+        // 왼쪽 클릭은 메뉴, 오른쪽(⌃)클릭은 메뉴 없이 잠 안 자기 켜기/끄기
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        Awake.shared.onChange = { [weak self] in self?.awakeChanged() }
+    }
+
+    @objc private func statusClicked() {
+        let e = NSApp.currentEvent
+        if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true {
+            Awake.shared.isOn ? Awake.shared.stop() : Awake.shared.start(minutes: Awake.minutes)
+            return
+        }
+        refreshAwakeMenu()
+        statusItem.menu = statusMenu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    private func refreshAwakeMenu() {
+        let a = Awake.shared
+        awakeItem?.title = a.end.map { "잠 안 자기 (\(Awake.left($0.timeIntervalSinceNow)))" } ?? (a.isOn ? "잠 안 자기 (켜짐)" : "잠 안 자기")
+        for item in awakeItem?.submenu?.items ?? [] {
+            let m = Awake.choices.first { $0.title == item.title }?.minutes
+            item.state = a.isOn && m == Awake.minutes ? .on : .off
+        }
+    }
+
+    private func awakeChanged() {
+        steamTimer?.invalidate(); steamTimer = nil
+        guard Awake.shared.isOn else { statusItem.button?.image = bearIcon; return }
+        statusItem.button?.image = AwakeIcon.image(bear: bearIcon, steam: 2)
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        // 3초 주기: 김 없음 → 낮게 → 높게
+        var frame = 0
+        steamTimer = Ticker.every("잠 안 자기 김", 1) { [weak self] _ in
+            frame = (frame + 1) % 3
+            self?.statusItem.button?.image = AwakeIcon.image(bear: self?.bearIcon, steam: frame)
+        }
     }
 }
 

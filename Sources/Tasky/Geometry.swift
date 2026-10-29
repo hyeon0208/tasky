@@ -494,6 +494,17 @@ enum SelfTest {
             check(RingOrder.move([1, 2, 3, 4], from: 0, to: 2) == [2, 3, 1, 4], "링 칸 뒤로 옮기기")
             check(RingOrder.move([1, 2, 3, 4], from: 3, to: 1) == [1, 4, 2, 3], "링 칸 앞으로 옮기기")
         }
+        // F23 잠 안 자기
+        do {
+            let now = Date(timeIntervalSince1970: 0)
+            check(Awake.end(minutes: 0, from: now) == nil, "영원히는 끝 없음")
+            check(Awake.end(minutes: 720, from: now) == now.addingTimeInterval(43200), "12시간 끝 시각")
+            check(Awake.left(42 * 60) == "남은 42분", "남은 분")
+            check(Awake.left(41 * 60 + 1) == "남은 42분", "남은 분 올림")
+            check(Awake.left(65 * 60) == "남은 1시간 5분", "남은 시간·분")
+            check(Awake.left(720 * 60) == "남은 12시간", "남은 시간")
+            check(Awake.left(5) == "남은 1분", "1분 미만")
+        }
         // F18 3D 곰: 스프링·모션
         var sp = Spring(stiffness: 120, damping: 14)
         var peak = 0.0
