@@ -1,11 +1,11 @@
 # F22 화면 캡처 — spec
-- 작성: 2026-10-30 · 근거: intent.md(승인됨 2026-10-30) · 상태: 승인 대기
+- 작성: 2026-10-30 · 근거: intent.md(승인됨 2026-10-30) · 상태: 승인됨(2026-10-30)
 
 ## 지금 상태 (코드로 확인)
 - 전역 단축키: `HotKey.shared.add(id:keyCode:modifiers:action:)`(Clipboard.swift). Carbon이라 권한이 필요 없다. 클립보드는 id 1, F15 창 정리는 여러 id를 쓴다.
 - 단축키 설정 화면: F15 `snapSettings()`(PetController.swift:1024)에 동작별 키 기록 버튼, 겹침 표시, 권한 상태 줄이 있다.
 - 떠 있는 창: `FloatingPanel`(PetView.swift). 메뉴 막대 메뉴: `App.setUpStatusItem`.
-- Tasky는 아직 `.app` 번들이 아니다(`swift build` 실행 파일).
+- `scripts/make-app.sh`로 `dist/Tasky.app`(직접 서명)을 만든다(1950626). 화면 기록 권한은 앱에 붙는다.
 
 ## 우려 사항
 1. **화면 기록 권한이 누구에게 붙는지.** 번들이 아닌 실행 파일을 터미널에서 띄우면, 권한이 Tasky가 아니라 터미널 앱에 붙을 수 있다(추정). 권한 확인은 `CGPreflightScreenCaptureAccess()`, 요청은 `CGRequestScreenCaptureAccess()`. 권한이 없으면 메뉴에서 "화면 기록 권한이 필요해요 — 권한 열기"(`Privacy_ScreenCapture`)를 보여 준다. 번들 문제는 이미 미뤄 둔 '.app 번들' 작업과 함께 푼다.
@@ -102,3 +102,4 @@
 
 ## 변경 이력
 - 2026-10-30 초안
+- 2026-10-30 앱 번들 먼저 만듦, 사용자 승인("진행")
