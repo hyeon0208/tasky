@@ -294,6 +294,15 @@ final class HotKey {
         return s + "#\(keyCode)"
     }
 
+    static func cocoaModifiers(_ m: UInt32) -> NSEvent.ModifierFlags {
+        var f: NSEvent.ModifierFlags = []
+        if m & UInt32(cmdKey) != 0 { f.insert(.command) }
+        if m & UInt32(shiftKey) != 0 { f.insert(.shift) }
+        if m & UInt32(optionKey) != 0 { f.insert(.option) }
+        if m & UInt32(controlKey) != 0 { f.insert(.control) }
+        return f
+    }
+
     static func carbonModifiers(_ f: NSEvent.ModifierFlags) -> UInt32 {
         var m: UInt32 = 0
         if f.contains(.command) { m |= UInt32(cmdKey) }

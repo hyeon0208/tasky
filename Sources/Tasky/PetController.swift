@@ -975,6 +975,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             ])),
             SettingsTab(id: "clipboard", title: "클립보드", symbol: "doc.on.clipboard", content: clipboardSettings()),
             SettingsTab(id: "snap", title: "창 정리", symbol: "rectangle.split.2x1", content: snapSettings()),
+            SettingsTab(id: "capture", title: "화면 캡처", symbol: "camera.viewfinder", content: captureSettings()),
         ] + (Debug.isOn ? [SettingsTab(id: "debug", title: "개발자", symbol: "hammer", content: {
                 let d = DebugTab()
                 settingsKeepAlive.append(d)
@@ -1091,6 +1092,83 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         ] + keyRows)])
     }
 
+    /// 설정 '화면 캡처' 탭 (F22)
+    private func captureSettings() -> NSView {
+        func label(_ t: String) -> NSTextField { NSTextField(labelWithString: t) }
+        func note(_ t: String) -> NSTextField {
+            let f = NSTextField(wrappingLabelWithString: t)
+            f.font = .systemFont(ofSize: 11)
+            f.textColor = .secondaryLabelColor
+            f.preferredMaxLayoutWidth = 320
+            return f
+        }
+        let status = note("")
+        let openPermission = ClosureButton("권한 열기") { Capture.openPermission() }
+        let folder = ClosureButton(Capture.folder.lastPathComponent) {}
+        folder.handler = { [weak folder] in
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.canCreateDirectories = true
+            panel.directoryURL = Capture.folder
+            NSApp.activate(ignoringOtherApps: true)
+            if panel.runModal() == .OK, let url = panel.url { Capture.folder = url; folder?.title = url.lastPathComponent }
+        }
+        var rows: [(CaptureMode, NSButton, NSTextField)] = []
+        func keyTitle(_ m: CaptureMode) -> String { m.key.map { HotKey.title(keyCode: $0.code, modifiers: $0.mods) } ?? "없음" }
+        func refresh() {
+            let granted = Capture.hasPermission
+            openPermission.isHidden = granted
+            status.stringValue = !Capture.enabled ? "단축키가 꺼져 있어요. 메뉴 막대 메뉴로는 언제든 찍을 수 있어요."
+                : granted ? "켜져 있어요. 찍으면 클립보드에 복사되고 오른쪽 아래에 미리보기가 떠요."
+                : "화면 기록 권한이 필요해요. 권한을 켠 뒤 Tasky를 다시 열어야 할 수 있어요."
+            for (m, button, mark) in rows {
+                button.title = keyTitle(m)
+                switch Capture.shared.status[m] {
+                case .system?: mark.stringValue = "겹침(시스템)"; mark.textColor = .systemRed
+                case .taken?: mark.stringValue = "겹침(다른 앱)"; mark.textColor = .systemRed
+                case .ours?: mark.stringValue = "겹침(Tasky 안)"; mark.textColor = .systemRed
+                default: mark.stringValue = ""
+                }
+            }
+        }
+        var keyRows: [[NSView]] = []
+        for m in CaptureMode.allCases {
+            let mark = NSTextField(labelWithString: "")
+            mark.font = .systemFont(ofSize: 11)
+            let record = ClosureButton(keyTitle(m)) {}
+            record.handler = { [weak self, weak record] in
+                self?.stopKeyRecorder()
+                record?.title = "키를 누르세요…"
+                HotKey.shared.unregister()
+                SnapController.shared.stop()
+                Capture.shared.stop()
+                self?.keyRecorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+                    self?.stopKeyRecorder()
+                    // Esc 취소, ⌫만 누르면 지우기. ⌘·⌃·⌥ 중 하나는 있어야 한다
+                    if e.keyCode == 51 && e.modifierFlags.intersection([.command, .control, .option]).isEmpty { m.key = nil }
+                    else if e.keyCode != 53, !e.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+                        m.key = (UInt32(e.keyCode), HotKey.carbonModifiers(e.modifierFlags))
+                    }
+                    Capture.shared.start()
+                    return nil
+                }
+            }
+            let reset = ClosureButton("기본") { m.key = m.defaultKey; Capture.shared.start() }
+            rows.append((m, record, mark))
+            keyRows.append([label(m.title), NSStackView(views: [record, reset, mark])])
+        }
+        Capture.shared.onChange = { refresh() }
+        refresh()
+        return SettingsTabs.grid([(nil, [
+            [label("단축키로 화면 캡처"), SettingsTabs.toggle(Capture.enabled) { Capture.shared.setEnabled($0) }, note("켜면 '화면 기록' 권한을 물어요")],
+            [NSView(), NSStackView(views: [status, openPermission])],
+            [NSView(), note("단축키 버튼을 누르고 새 키를 누르세요. ⌫는 지우기, Esc는 취소예요.")],
+        ] + keyRows + [
+            [label("저장 폴더"), folder, note("미리보기를 누르면 여기에 PNG로 저장해요")],
+        ])])
+    }
+
     /// 설정 '클립보드' 탭
     private func clipboardSettings() -> NSView {
         func check(_ on: Bool, _ toggle: @escaping (Bool) -> Void) -> NSView { SettingsTabs.toggle(on, toggle) }
@@ -1164,6 +1242,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             // 녹화 동안 멈춘 단축키를 다시 건다(등록된 키는 녹화 칸까지 오지 않음)
             HotKey.shared.register()
             SnapController.shared.start()
+            Capture.shared.start()
         }
         keyRecorder = nil
     }
@@ -1171,6 +1250,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private func closeSettings() {
         stopKeyRecorder()
         SnapController.shared.onChange = {}
+        Capture.shared.onChange = {}
         if let m = settingsMonitor { NSEvent.removeMonitor(m); settingsMonitor = nil }
         settingsPanel?.orderOut(nil)
         settingsPanel = nil
@@ -1335,6 +1415,7 @@ final class App: NSObject {
     private var statusMenu = NSMenu()
     private var bearIcon: NSImage?
     private var awakeItem: NSMenuItem?
+    private var captureItem: NSMenuItem?
     private var steamTimer: Timer?
     private var counter: Int
 
@@ -1374,6 +1455,7 @@ final class App: NSObject {
         HotKey.shared.onPress = { ClipWindow.shared.toggle() }
         HotKey.shared.register()
         SnapController.shared.start()   // F15: 켜져 있을 때만 단축키·마우스 감시
+        Capture.shared.start()   // F22: 켜져 있을 때만 단축키
         PerfSampler.shared.update()   // --debug이고 기록이 켜져 있으면 바로 기록 시작
         for e in HookServer.drainSpool() { agents.apply(e, offline: true) }
         server = HookServer { [weak self] e in self?.agents.apply(e) }
@@ -1494,6 +1576,13 @@ final class App: NSObject {
         awake.submenu = sub
         menu.addItem(awake)
         awakeItem = awake
+        // F22 화면 캡처: 단축키는 표시만(메뉴가 열려 있을 때만 동작)
+        let capture = NSMenuItem(title: "화면 캡처", action: nil, keyEquivalent: "")
+        let capSub = NSMenu()
+        for m in CaptureMode.allCases { capSub.addItem(ClosureMenuItem(m.title) { Capture.shared.take(m) }) }
+        capture.submenu = capSub
+        menu.addItem(capture)
+        captureItem = capture
         menu.addItem(.separator())
         let sound = ClosureMenuItem("작업 알림음") {}
         sound.state = AlertCard.soundOn ? .on : .off
@@ -1538,9 +1627,20 @@ final class App: NSObject {
             return
         }
         refreshAwakeMenu()
+        refreshCaptureMenu()
         statusItem.menu = statusMenu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
+    }
+
+    /// 메뉴를 열 때마다 지금 단축키를 옆에 표시한다(켜져 있고 한 글자 키일 때만)
+    private func refreshCaptureMenu() {
+        for (item, m) in zip(captureItem?.submenu?.items ?? [], CaptureMode.allCases) {
+            let key = Capture.enabled ? m.key : nil
+            let ch = key.map { HotKey.title(keyCode: $0.code, modifiers: 0) } ?? ""
+            item.keyEquivalent = ch.count == 1 ? ch.lowercased() : ""
+            item.keyEquivalentModifierMask = key.map { HotKey.cocoaModifiers($0.mods) } ?? []
+        }
     }
 
     private func refreshAwakeMenu() {

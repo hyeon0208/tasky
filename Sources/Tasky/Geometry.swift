@@ -494,6 +494,14 @@ enum SelfTest {
             check(RingOrder.move([1, 2, 3, 4], from: 0, to: 2) == [2, 3, 1, 4], "링 칸 뒤로 옮기기")
             check(RingOrder.move([1, 2, 3, 4], from: 3, to: 1) == [1, 4, 2, 3], "링 칸 앞으로 옮기기")
         }
+        // F22 화면 캡처: 저장 이름·겹칠 때 번호
+        do {
+            var c = DateComponents(); c.year = 2026; c.month = 10; c.day = 30; c.hour = 14; c.minute = 5; c.second = 12
+            let d = Calendar.current.date(from: c)!
+            check(Capture.fileName(d) { _ in false } == "Tasky 캡처 2026-10-30 14.05.12.png", "캡처 저장 이름")
+            let taken: Set = ["Tasky 캡처 2026-10-30 14.05.12.png", "Tasky 캡처 2026-10-30 14.05.12 2.png"]
+            check(Capture.fileName(d) { taken.contains($0) } == "Tasky 캡처 2026-10-30 14.05.12 3.png", "캡처 이름 겹치면 번호")
+        }
         // F23 잠 안 자기
         do {
             let now = Date(timeIntervalSince1970: 0)
