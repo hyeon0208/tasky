@@ -526,6 +526,13 @@ enum SelfTest {
                                                        Mark(tool: .spotlight, a: CGPoint(x: 60, y: 60), b: CGPoint(x: 90, y: 90))], scale: 1) != nil, "모자이크·스포트라이트 그리기")
             check(pixel(MarkRender.image(base: base, marks: [Mark(tool: .spotlight, a: CGPoint(x: 60, y: 60), b: CGPoint(x: 90, y: 90))], scale: 1)!, 10, 10).0 < 200,
                   "스포트라이트 밖은 어두움")
+            let text = NSImage(size: NSSize(width: 400, height: 80), flipped: false) { r in
+                NSColor.white.setFill(); r.fill()
+                NSAttributedString(string: "Tasky 캡처", attributes: [.font: NSFont.systemFont(ofSize: 40), .foregroundColor: NSColor.black]).draw(at: NSPoint(x: 10, y: 15))
+                return true
+            }.cgImage(forProposedRect: nil, context: nil, hints: nil)!
+            let read = CaptureEditor.recognize(text).joined()
+            check(read.contains("Tasky") && read.contains("캡처"), "글자 인식: \(read)")
         }
         // F23 잠 안 자기
         do {

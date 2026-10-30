@@ -1,4 +1,5 @@
 import AppKit
+import Vision
 import CoreImage
 
 // F22 2단계: 캡처 편집 창. 원본 이미지 + 도형 목록, 화면과 결과를 같은 함수로 그린다. 근거: intent/F22-화면-캡처/spec.md 6
@@ -213,9 +214,11 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
         let undo = Self.button("arrow.uturn.backward", "되돌리기 (⌘Z)") { [weak self] in self?.canvas.undo() }
         let copy = Self.button("doc.on.doc", "복사 (⌘C)") { [weak self] in self?.copyResult() }
         let save = Self.button("square.and.arrow.down", "저장 (⌘S)") { [weak self] in self?.save() }
+        let ocr = Self.button("text.viewfinder", "글자 복사") { [weak self] in self?.copyText() }
+        let pin = Self.button("pin", "화면에 고정") { [weak self] in self?.pin() }
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
-        let bar = NSStackView(views: [tools, colors, undo, note, NSView(), copy, save])
+        let bar = NSStackView(views: [tools, colors, undo, note, NSView(), ocr, pin, copy, save])
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         let stack = NSStackView(views: [bar, canvas])
@@ -287,6 +290,39 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
     private func save() {
         guard let png = result() else { return }
         note.stringValue = (try? Capture.save(png)) != nil ? "저장됨" : "저장하지 못했어요"
+    }
+
+    private func copyText() {
+        canvas.finishText()
+        guard let img = MarkRender.image(base: canvas.base, marks: canvas.marks, scale: canvas.scale, pixelated: canvas.pixelated) else { return }
+        note.stringValue = "글자 읽는 중…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let lines = Self.recognize(img)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard !lines.isEmpty else { self.note.stringValue = "글자를 찾지 못했어요"; return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+                self.note.stringValue = "\(lines.count)줄 복사됨"
+            }
+        }
+    }
+
+    /// 한국어·영어 글자 인식. 줄 순서(위→아래)대로 돌려준다.
+    static func recognize(_ image: CGImage) -> [String] {
+        let req = VNRecognizeTextRequest()
+        req.recognitionLevel = .accurate
+        req.recognitionLanguages = ["ko-KR", "en-US"]
+        req.usesLanguageCorrection = true
+        try? VNImageRequestHandler(cgImage: image).perform([req])
+        return (req.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    private func pin() {
+        canvas.finishText()
+        guard let img = MarkRender.image(base: canvas.base, marks: canvas.marks, scale: canvas.scale, pixelated: canvas.pixelated) else { return }
+        PinView.show(img, scale: canvas.scale)
+        window.performClose(nil)
     }
 
     private static func swatch(_ c: NSColor) -> NSImage {
@@ -639,5 +675,74 @@ final class MarkCanvas: NSView {
         marks.append(Mark(tool: .text, a: editorPoint, b: editorPoint, color: c, text: text))
         needsDisplay = true
         onChange()
+    }
+}
+
+/// 화면에 고정한 이미지. 끌어서 옮기고, 스크롤로 크기, ⌥스크롤로 투명도. 더블클릭은 편집, Esc는 닫기.
+final class PinView: NSView {
+    private static var open: [PinView] = []
+    private let panel: NSPanel
+    private let image: CGImage
+    private let scale: CGFloat
+    private var zoom: CGFloat = 1
+
+    static func show(_ image: CGImage, scale: CGFloat) { open.append(PinView(image: image, scale: scale)) }
+
+    private init(image: CGImage, scale: CGFloat) {
+        self.image = image
+        self.scale = scale
+        let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
+        let v = NSScreen.withMouse.visibleFrame
+        panel = NSPanel(contentRect: NSRect(x: v.midX - size.width / 2, y: v.midY - size.height / 2, width: size.width, height: size.height),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        super.init(frame: NSRect(origin: .zero, size: size))
+        panel.level = .floating
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.becomesKeyOnlyIfNeeded = false
+        wantsLayer = true
+        layer?.contents = image
+        layer?.contentsGravity = .resize
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        setAccessibilityLabel("고정한 캡처. 더블클릭하면 편집, Esc로 닫기")
+        panel.contentView = self
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    private func close() {
+        panel.orderOut(nil)
+        Self.open.removeAll { $0 === self }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { close() } else { super.keyDown(with: event) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            close()
+            CaptureEditor.show(image, scale: scale)
+        } else {
+            panel.performDrag(with: event)
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let d = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.005 : 0.05)
+        if event.modifierFlags.contains(.option) {
+            panel.alphaValue = min(1, max(0.2, panel.alphaValue + d))
+            return
+        }
+        zoom = min(4, max(0.2, zoom + d))
+        let f = panel.frame
+        let size = NSSize(width: CGFloat(image.width) / scale * zoom, height: CGFloat(image.height) / scale * zoom)
+        panel.setFrame(NSRect(x: f.midX - size.width / 2, y: f.midY - size.height / 2, width: size.width, height: size.height), display: true)
     }
 }
