@@ -286,6 +286,8 @@ final class SnapController {
         hiddenApps = NSWorkspace.shared.runningApplications.filter {
             $0.activationPolicy == .regular && !$0.isHidden && $0 != NSRunningApplication.current
         }
+        // 앞에 있는 앱을 숨기면 macOS가 다른 앱을 앞으로 올리며 다시 보이게 하므로, 먼저 Tasky를 앞으로
+        NSApp.activate(ignoringOtherApps: true)
         hiddenApps.forEach { $0.hide() }
     }
 
