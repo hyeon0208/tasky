@@ -18,7 +18,13 @@ enum MarkTool: String, CaseIterable {
         case .highlight: "highlighter"; case .number: "1.circle"; case .spotlight: "light.max"; case .magnify: "plus.magnifyingglass"; case .crop: "crop"
         }
     }
-    /// 도구 바꾸기 키
+    /// 도구 바꾸기 키(키 위치. 한글 입력 중에도 같은 자리)
+    var keyCode: UInt16 {
+        switch self {
+        case .arrow: 0; case .rect: 15; case .text: 17; case .mosaic: 46; case .highlight: 4
+        case .number: 45; case .spotlight: 1; case .magnify: 6; case .crop: 8
+        }
+    }
     var key: String {
         switch self {
         case .arrow: "a"; case .rect: "r"; case .text: "t"; case .mosaic: "m"; case .highlight: "h"
@@ -37,6 +43,8 @@ struct Mark {
     var number = 0
     /// 돋보기의 확대 원 중심
     var dest: CGPoint = .zero
+    /// 글씨·번호 크기 배율
+    var size: CGFloat = 1
 
     var rect: CGRect { CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y)) }
     var radius: CGFloat { max(8, hypot(b.x - a.x, b.y - a.y)) }
@@ -103,14 +111,14 @@ enum MarkRender {
                 ctx.setStrokeColor(m.color.withAlphaComponent(0.35).cgColor); ctx.setLineWidth(6 * line); ctx.setLineCap(.butt)
                 ctx.move(to: m.a); ctx.addLine(to: CGPoint(x: m.b.x, y: m.a.y)); ctx.strokePath()   // 가로줄로 곧게
             case .number:
-                let r = 13 * scale
+                let r = 13 * scale * m.size
                 ctx.fillEllipse(in: CGRect(x: m.a.x - r, y: m.a.y - r, width: 2 * r, height: 2 * r))
-                let s = NSAttributedString(string: "\(m.number)", attributes: [.font: NSFont.systemFont(ofSize: 15 * scale, weight: .bold),
+                let s = NSAttributedString(string: "\(m.number)", attributes: [.font: NSFont.systemFont(ofSize: 15 * scale * m.size, weight: .bold),
                                                                              .foregroundColor: m.color == .systemYellow ? NSColor.black : NSColor.white])
                 let size = s.size()
                 s.draw(at: CGPoint(x: m.a.x - size.width / 2, y: m.a.y - size.height / 2))
             case .text:
-                NSAttributedString(string: m.text, attributes: [.font: NSFont.systemFont(ofSize: 20 * scale, weight: .semibold),
+                NSAttributedString(string: m.text, attributes: [.font: NSFont.systemFont(ofSize: 20 * scale * m.size, weight: .semibold),
                                                                 .foregroundColor: m.color]).draw(at: m.a)
             case .magnify:
                 let r = m.radius, big = r * 2
@@ -230,7 +238,7 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
         canvas.onChange = { [weak self] in self?.note.stringValue = "" }
 
         window.center()
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(canvas)
     }
@@ -246,17 +254,17 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
     /// ⌘Z ⇧⌘Z ⌘C ⌘S ⌘W, 글자 키로 도구 바꾸기
     private func key(_ e: NSEvent) -> Bool {
         let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
-        let ch = e.charactersIgnoringModifiers?.lowercased() ?? ""
-        switch (mods, ch) {
-        case ([.command], "z"): canvas.undo()
-        case ([.command, .shift], "z"): canvas.redo()
-        case ([.command], "c"): copyResult()
-        case ([.command], "s"): save()
-        case ([.command], "w"): window.performClose(nil)
+        // 키 위치: Z 6, C 8, S 1, W 13
+        switch (mods, e.keyCode) {
+        case ([.command], 6): canvas.undo()
+        case ([.command, .shift], 6): canvas.redo()
+        case ([.command], 8): copyResult()
+        case ([.command], 1): save()
+        case ([.command], 13): window.performClose(nil)
         case ([], _) where e.keyCode == 51 || e.keyCode == 117: canvas.deleteSelected()   // ⌫ ⌦
         case ([], _) where e.keyCode == 53: canvas.select(nil)   // Esc
         case ([], _):
-            guard let i = MarkTool.allCases.firstIndex(where: { $0.key == ch }) else { return false }
+            guard let i = MarkTool.allCases.firstIndex(where: { $0.keyCode == e.keyCode }) else { return false }
             tools.selectedSegment = i
             toolChanged()
         default: return false
@@ -308,7 +316,7 @@ final class MarkCanvas: NSView {
     private var drafting: Mark?
     private var selected: Int? { didSet { needsDisplay = true; onSelect(selected.map { marks[$0].color }) } }
     /// 끄는 중인 것: 통째로 옮기기, 끝점(a/b) 옮기기, 확대 원 옮기기
-    private enum Drag { case move(start: CGPoint, original: Mark), pointA, pointB, dest }
+    private enum Drag { case move(start: CGPoint, original: Mark), pointA, pointB, dest, corner(fixed: CGPoint), scale(original: Mark) }
     private var drag: Drag?
     private var editor: NSTextField?
     private var editorPoint: CGPoint = .zero
@@ -369,7 +377,7 @@ final class MarkCanvas: NSView {
             ctx.setStrokeColor(NSColor.controlAccentColor.cgColor); ctx.setLineDash(phase: 0, lengths: [4 / l.k, 3 / l.k])
             ctx.stroke(bounds(of: m).insetBy(dx: -4 / l.k, dy: -4 / l.k))
             ctx.setLineDash(phase: 0, lengths: [])
-            for h in handles(of: m) {
+            for (h, _) in handles(of: m) {
                 let r = 4.5 / l.k
                 let box = CGRect(x: h.x - r, y: h.y - r, width: 2 * r, height: 2 * r)
                 ctx.setFillColor(NSColor.white.cgColor); ctx.fillEllipse(in: box); ctx.strokeEllipse(in: box)
@@ -385,7 +393,7 @@ final class MarkCanvas: NSView {
         switch m.tool {
         case .arrow: return m.rect
         case .highlight: return CGRect(x: min(m.a.x, m.b.x), y: m.a.y - 12 * scale, width: abs(m.b.x - m.a.x), height: 24 * scale)
-        case .number: let r = 13 * scale; return CGRect(x: m.a.x - r, y: m.a.y - r, width: 2 * r, height: 2 * r)
+        case .number: let r = 13 * scale * m.size; return CGRect(x: m.a.x - r, y: m.a.y - r, width: 2 * r, height: 2 * r)
         case .text: return CGRect(origin: m.a, size: textSize(m))
         case .magnify:
             let r = m.radius, big = 2 * r
@@ -395,16 +403,21 @@ final class MarkCanvas: NSView {
     }
 
     private func textSize(_ m: Mark) -> CGSize {
-        NSAttributedString(string: m.text, attributes: [.font: NSFont.systemFont(ofSize: 20 * scale, weight: .semibold)]).size()
+        NSAttributedString(string: m.text, attributes: [.font: NSFont.systemFont(ofSize: 20 * scale * m.size, weight: .semibold)]).size()
     }
 
-    /// 끌어서 모양을 바꾸는 점
-    private func handles(of m: Mark) -> [CGPoint] {
+    /// 끌어서 모양·크기를 바꾸는 점
+    private func handles(of m: Mark) -> [(point: CGPoint, drag: Drag)] {
         switch m.tool {
-        case .arrow, .rect, .mosaic, .spotlight: return [m.a, m.b]
-        case .highlight: return [m.a, CGPoint(x: m.b.x, y: m.a.y)]
-        case .magnify: return [m.b]
-        default: return []
+        case .arrow: return [(m.a, .pointA), (m.b, .pointB)]
+        case .highlight: return [(m.a, .pointA), (CGPoint(x: m.b.x, y: m.a.y), .pointB)]
+        case .rect, .mosaic, .spotlight: // 네 모서리, 맞은편 모서리는 그대로
+            let r = m.rect
+            let corners = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+            return corners.indices.map { (corners[$0], .corner(fixed: corners[($0 + 2) % 4])) }
+        case .magnify: return [(m.b, .pointB)]
+        case .text, .number: let b = bounds(of: m); return [(CGPoint(x: b.maxX, y: b.maxY), .scale(original: m))]
+        case .crop: return []
         }
     }
 
@@ -460,12 +473,7 @@ final class MarkCanvas: NSView {
         // 고른 도형의 끝점·확대 원
         if let i = selected {
             let m = marks[i], t = tolerance
-            let hs = handles(of: m)
-            if m.tool == .magnify, hypot(p.x - m.b.x, p.y - m.b.y) < t { commit(); drag = .pointB; return }
-            if hs.count == 2 {
-                if hypot(p.x - hs[0].x, p.y - hs[0].y) < t { commit(); drag = .pointA; return }
-                if hypot(p.x - hs[1].x, p.y - hs[1].y) < t { commit(); drag = .pointB; return }
-            }
+            if let h = handles(of: m).first(where: { hypot(p.x - $0.point.x, p.y - $0.point.y) < t }) { commit(); drag = h.drag; return }
         }
         if let i = hit(p) {
             let m = marks[i]
@@ -499,6 +507,12 @@ final class MarkCanvas: NSView {
             case .pointA: marks[i].a = p
             case .pointB: marks[i].b = p
             case .dest: marks[i].dest = p
+            case let .corner(fixed): marks[i].a = fixed; marks[i].b = p
+            case let .scale(o):
+                // 기준점(글씨는 왼쪽 아래, 번호는 가운데)에서 손잡이까지 거리 비율로 키우고 줄인다
+                let b = bounds(of: o)
+                let was = hypot(b.maxX - o.a.x, b.maxY - o.a.y)
+                marks[i].size = max(0.4, min(6, o.size * hypot(p.x - o.a.x, p.y - o.a.y) / max(was, 1)))
             }
             needsDisplay = true
             return

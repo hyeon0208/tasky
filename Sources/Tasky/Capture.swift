@@ -113,7 +113,7 @@ final class Capture {
         alert.informativeText = "시스템 설정 → 개인정보 보호 및 보안 → 화면 및 시스템 오디오 기록에서 Tasky를 켜 주세요. 켠 뒤 Tasky를 다시 열어야 할 수 있어요."
         alert.addButton(withTitle: "권한 열기")
         alert.addButton(withTitle: "닫기")
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         if alert.runModal() == .alertFirstButtonReturn { Self.openPermission() }
     }
 

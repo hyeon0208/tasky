@@ -286,9 +286,13 @@ final class SnapController {
         hiddenApps = NSWorkspace.shared.runningApplications.filter {
             $0.activationPolicy == .regular && !$0.isHidden && $0 != NSRunningApplication.current
         }
-        // 앞에 있는 앱을 숨기면 macOS가 다른 앱을 앞으로 올리며 다시 보이게 하므로, 먼저 Tasky를 앞으로
-        NSApp.activate(ignoringOtherApps: true)
-        hiddenApps.forEach { $0.hide() }
+        // ⌥⌘H와 같은 시스템 동작: 앞에 있는 앱 빼고 모두 숨김. Tasky를 앞으로 올린 뒤 부르면 Tasky만 남는다
+        NSApp.activate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSWorkspace.shared.hideOtherApplications()
+            // 그래도 남은 것(올리기 전에 앞에 있던 앱)은 하나씩
+            self.hiddenApps.filter { !$0.isHidden }.forEach { $0.hide() }
+        }
     }
 
     /// 다른 모니터로: 같은 비율 자리로, 크기는 새 화면에 맞게 줄인다
