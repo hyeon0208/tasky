@@ -22,9 +22,23 @@ enum SnapAction: String, CaseIterable {
         }
     }
 
-    /// Rectangle 기본값: ⌃⌥ + 키, 모니터 이동은 ⌃⌥⌘
+    /// 기본값: ⌃⌥ + 키, 모니터 이동은 ⌃⌥⌘. 아래 동작은 사용자가 쓰던 키를 기본으로(2026-10-31)
     var defaultKey: (code: UInt32, mods: UInt32) {
         let co = UInt32(controlKey | optionKey)
+        let cos = co | UInt32(shiftKey), coc = co | UInt32(cmdKey)
+        switch self {
+        case .topLeft: return (UInt32(kVK_LeftArrow), cos)
+        case .topRight: return (UInt32(kVK_UpArrow), cos)
+        case .bottomLeft: return (UInt32(kVK_DownArrow), cos)
+        case .bottomRight: return (UInt32(kVK_RightArrow), cos)
+        case .center: return (UInt32(kVK_ANSI_Semicolon), cos)
+        case .firstThird: return (UInt32(kVK_ANSI_A), cos)
+        case .centerThird: return (UInt32(kVK_ANSI_S), cos)
+        case .lastThird: return (UInt32(kVK_ANSI_D), cos)
+        case .maximize: return (UInt32(kVK_UpArrow), coc)
+        case .desktop: return (UInt32(kVK_Space), coc)
+        default: break
+        }
         let k: Int = switch self {
         case .leftHalf, .prevDisplay: kVK_LeftArrow; case .rightHalf, .nextDisplay: kVK_RightArrow
         case .topHalf: kVK_UpArrow; case .bottomHalf: kVK_DownArrow; case .maximize: kVK_Return
