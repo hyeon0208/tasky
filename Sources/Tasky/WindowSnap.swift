@@ -8,6 +8,7 @@ enum SnapAction: String, CaseIterable {
     case topLeft, topRight, bottomLeft, bottomRight
     case firstThird, centerThird, lastThird, firstTwoThirds, lastTwoThirds
     case prevDisplay, nextDisplay
+    case smaller, larger, desktop   // 뒤에 더해야 단축키 id(100+순서)가 그대로
 
     var title: String {
         switch self {
@@ -17,6 +18,7 @@ enum SnapAction: String, CaseIterable {
         case .firstThird: "왼쪽 3분의 1"; case .centerThird: "가운데 3분의 1"; case .lastThird: "오른쪽 3분의 1"
         case .firstTwoThirds: "왼쪽 3분의 2"; case .lastTwoThirds: "오른쪽 3분의 2"
         case .prevDisplay: "이전 모니터로"; case .nextDisplay: "다음 모니터로"
+        case .smaller: "작게"; case .larger: "크게"; case .desktop: "바탕화면 보기"
         }
     }
 
@@ -30,6 +32,7 @@ enum SnapAction: String, CaseIterable {
         case .topLeft: kVK_ANSI_U; case .topRight: kVK_ANSI_I; case .bottomLeft: kVK_ANSI_J; case .bottomRight: kVK_ANSI_K
         case .firstThird: kVK_ANSI_D; case .centerThird: kVK_ANSI_F; case .lastThird: kVK_ANSI_G
         case .firstTwoThirds: kVK_ANSI_E; case .lastTwoThirds: kVK_ANSI_T
+        case .smaller: kVK_ANSI_Minus; case .larger: kVK_ANSI_Equal; case .desktop: kVK_ANSI_H
         }
         return (UInt32(k), self == .prevDisplay || self == .nextDisplay ? co | UInt32(cmdKey) : co)
     }
@@ -71,7 +74,14 @@ enum SnapMath {
         case .lastThird: return cols(2 / 3, 1 / 3)
         case .firstTwoThirds: return cols(0, 2 / 3)
         case .lastTwoThirds: return cols(1 / 3, 2 / 3)
-        case .restore, .prevDisplay, .nextDisplay: return nil
+        case .smaller, .larger:
+            // 가운데를 두고 사방 30pt씩. 너무 작아지거나 화면 밖으로 나가지 않게
+            let d: CGFloat = a == .smaller ? -30 : 30
+            let s = CGSize(width: min(w, max(200, current.width + 2 * d)), height: min(h, max(150, current.height + 2 * d)))
+            let x = min(max(current.midX - s.width / 2, r.minX), r.maxX - s.width)
+            let y = min(max(current.midY - s.height / 2, r.minY), r.maxY - s.height)
+            return CGRect(x: x, y: y, width: s.width, height: s.height)
+        case .restore, .prevDisplay, .nextDisplay, .desktop: return nil
         }
     }
 
@@ -232,6 +242,7 @@ final class SnapController {
     }
 
     func perform(_ a: SnapAction) {
+        if a == .desktop { toggleDesktop(); return }
         guard let w = AXWindow.focused() else { return }
         snap(w, a)
     }
@@ -261,6 +272,21 @@ final class SnapController {
         let t = SnapMath.flip(target, primaryHeight: primaryHeight)
         AXWindow.set(w, t)
         saved[key]?.last = AXWindow.frame(w) ?? t
+    }
+
+    /// 바탕화면 보기: 다른 앱을 모두 숨기고, 다시 누르면 숨긴 앱만 되돌린다
+    private var hiddenApps: [NSRunningApplication] = []
+    private func toggleDesktop() {
+        let shown = hiddenApps.filter { !$0.isTerminated && $0.isHidden }
+        if !shown.isEmpty {
+            shown.forEach { $0.unhide() }
+            hiddenApps = []
+            return
+        }
+        hiddenApps = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy == .regular && !$0.isHidden && $0 != NSRunningApplication.current
+        }
+        hiddenApps.forEach { $0.hide() }
     }
 
     /// 다른 모니터로: 같은 비율 자리로, 크기는 새 화면에 맞게 줄인다

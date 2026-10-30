@@ -161,6 +161,7 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
     private let note = NSTextField(labelWithString: "")
     private let tools = NSSegmentedControl()
     private let colors = NSSegmentedControl()
+    private var keyMonitor: Any?
 
     static func show(_ image: CGImage, scale: CGFloat) {
         let e = CaptureEditor(image: image, scale: scale)
@@ -183,8 +184,10 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
         tools.segmentCount = MarkTool.allCases.count
         for (i, t) in MarkTool.allCases.enumerated() {
             tools.setImage(NSImage(systemSymbolName: t.symbol, accessibilityDescription: t.title), forSegment: i)
+            tools.setLabel(t.key.uppercased(), forSegment: i)
+            tools.setImageScaling(.scaleProportionallyDown, forSegment: i)
             tools.setToolTip("\(t.title) (\(t.key.uppercased()))", forSegment: i)
-            tools.setWidth(30, forSegment: i)
+            tools.setWidth(42, forSegment: i)
         }
         tools.trackingMode = .selectOne
         tools.selectedSegment = 0
@@ -215,7 +218,15 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
         canvas.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         canvas.setContentHuggingPriority(.defaultLow, for: .vertical)
         window.contentView = stack
-        canvas.onKey = { [weak self] in self?.key($0) ?? false }
+        // 버튼을 누른 뒤에도 키가 먹게 창 단위로 받는다(글씨 입력 중에는 빼고)
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, e.window === self.window, !self.canvas.isEditingText else { return e }
+            return self.key(e) ? nil : e
+        }
+        canvas.onSelect = { [weak self] color in
+            guard let self, let color, let i = MarkRender.colors.firstIndex(of: color) else { return }
+            self.colors.selectedSegment = i
+        }
         canvas.onChange = { [weak self] in self?.note.stringValue = "" }
 
         window.center()
@@ -225,11 +236,12 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let m = keyMonitor { NSEvent.removeMonitor(m) }
         Self.open.removeAll { $0 === self }
     }
 
     @objc private func toolChanged() { canvas.tool = MarkTool.allCases[tools.selectedSegment] }
-    @objc private func colorChanged() { canvas.color = MarkRender.colors[colors.selectedSegment] }
+    @objc private func colorChanged() { canvas.setColor(MarkRender.colors[colors.selectedSegment]) }
 
     /// ⌘Z ⇧⌘Z ⌘C ⌘S ⌘W, 글자 키로 도구 바꾸기
     private func key(_ e: NSEvent) -> Bool {
@@ -241,6 +253,8 @@ final class CaptureEditor: NSObject, NSWindowDelegate {
         case ([.command], "c"): copyResult()
         case ([.command], "s"): save()
         case ([.command], "w"): window.performClose(nil)
+        case ([], _) where e.keyCode == 51 || e.keyCode == 117: canvas.deleteSelected()   // ⌫ ⌦
+        case ([], _) where e.keyCode == 53: canvas.select(nil)   // Esc
         case ([], _):
             guard let i = MarkTool.allCases.firstIndex(where: { $0.key == ch }) else { return false }
             tools.selectedSegment = i
@@ -289,28 +303,31 @@ final class MarkCanvas: NSView {
     let base: CGImage
     let scale: CGFloat
     private(set) var marks: [Mark] = []
-    private var redoStack: [Mark] = []
+    private var undoStack: [[Mark]] = []
+    private var redoStack: [[Mark]] = []
     private var drafting: Mark?
-    private var movingDest: Int?
+    private var selected: Int? { didSet { needsDisplay = true; onSelect(selected.map { marks[$0].color }) } }
+    /// 끄는 중인 것: 통째로 옮기기, 끝점(a/b) 옮기기, 확대 원 옮기기
+    private enum Drag { case move(start: CGPoint, original: Mark), pointA, pointB, dest }
+    private var drag: Drag?
     private var editor: NSTextField?
     private var editorPoint: CGPoint = .zero
-    var tool: MarkTool = .arrow { didSet { finishText() } }
+    var tool: MarkTool = .arrow { didSet { finishText(); select(nil) } }
     var color: NSColor = .systemRed
-    var onKey: (NSEvent) -> Bool = { _ in false }
     var onChange: () -> Void = {}
+    var onSelect: (NSColor?) -> Void = { _ in }
+    var isEditingText: Bool { editor != nil }
     private(set) lazy var pixelated: CGImage? = MarkRender.pixelate(base)
 
     init(base: CGImage, scale: CGFloat) {
         self.base = base
         self.scale = scale
         super.init(frame: .zero)
-        setAccessibilityLabel("캡처 이미지. 끌어서 표시를 더해요")
+        setAccessibilityLabel("캡처 이미지. 끌어서 표시를 더하고, 표시를 눌러 옮겨요")
     }
     required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with event: NSEvent) { if !onKey(event) { super.keyDown(with: event) } }
-    override func performKeyEquivalent(with event: NSEvent) -> Bool { editor == nil && event.modifierFlags.contains(.command) ? onKey(event) : false }
 
     /// 보이는 영역(자르기 반영)을 뷰에 맞춘 사각형과 배율
     private var layout: (visible: CGRect, frame: CGRect, k: CGFloat) {
@@ -326,6 +343,9 @@ final class MarkCanvas: NSView {
         return CGPoint(x: l.visible.minX + (p.x - l.frame.minX) / l.k, y: l.visible.minY + (p.y - l.frame.minY) / l.k)
     }
 
+    /// 화면에서 8pt를 이미지 픽셀로
+    private var tolerance: CGFloat { 8 / layout.k }
+
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .gray)?.setFill()
         bounds.fill()
@@ -336,32 +356,132 @@ final class MarkCanvas: NSView {
         ctx.translateBy(x: l.frame.minX, y: l.frame.minY)
         ctx.scaleBy(x: l.k, y: l.k)
         ctx.translateBy(x: -l.visible.minX, y: -l.visible.minY)
-        var all = marks
-        if let d = drafting { all.append(d) }
         // 자르기를 끄는 중이면 그 영역만 테두리로 보여 준다(아직 자르지 않음)
-        let shown = drafting?.tool == .crop ? marks : all
+        let shown = drafting.map { $0.tool == .crop ? marks : marks + [$0] } ?? marks
         MarkRender.draw(base: base, marks: shown, scale: scale, pixelated: pixelated, in: ctx)
+        ctx.setLineWidth(1.5 / l.k)
         if let d = drafting, d.tool == .crop {
-            ctx.setStrokeColor(NSColor.white.cgColor); ctx.setLineWidth(2 / l.k); ctx.setLineDash(phase: 0, lengths: [6 / l.k, 4 / l.k])
+            ctx.setStrokeColor(NSColor.white.cgColor); ctx.setLineDash(phase: 0, lengths: [6 / l.k, 4 / l.k])
             ctx.stroke(d.rect)
+        }
+        if let i = selected {
+            let m = marks[i]
+            ctx.setStrokeColor(NSColor.controlAccentColor.cgColor); ctx.setLineDash(phase: 0, lengths: [4 / l.k, 3 / l.k])
+            ctx.stroke(bounds(of: m).insetBy(dx: -4 / l.k, dy: -4 / l.k))
+            ctx.setLineDash(phase: 0, lengths: [])
+            for h in handles(of: m) {
+                let r = 4.5 / l.k
+                let box = CGRect(x: h.x - r, y: h.y - r, width: 2 * r, height: 2 * r)
+                ctx.setFillColor(NSColor.white.cgColor); ctx.fillEllipse(in: box); ctx.strokeEllipse(in: box)
+            }
         }
         ctx.restoreGState()
     }
+
+    // MARK: 고르기
+
+    /// 도형이 차지하는 영역(고르기·테두리용)
+    private func bounds(of m: Mark) -> CGRect {
+        switch m.tool {
+        case .arrow: return m.rect
+        case .highlight: return CGRect(x: min(m.a.x, m.b.x), y: m.a.y - 12 * scale, width: abs(m.b.x - m.a.x), height: 24 * scale)
+        case .number: let r = 13 * scale; return CGRect(x: m.a.x - r, y: m.a.y - r, width: 2 * r, height: 2 * r)
+        case .text: return CGRect(origin: m.a, size: textSize(m))
+        case .magnify:
+            let r = m.radius, big = 2 * r
+            return CGRect(x: m.a.x - r, y: m.a.y - r, width: 2 * r, height: 2 * r).union(CGRect(x: m.dest.x - big, y: m.dest.y - big, width: 2 * big, height: 2 * big))
+        default: return m.rect
+        }
+    }
+
+    private func textSize(_ m: Mark) -> CGSize {
+        NSAttributedString(string: m.text, attributes: [.font: NSFont.systemFont(ofSize: 20 * scale, weight: .semibold)]).size()
+    }
+
+    /// 끌어서 모양을 바꾸는 점
+    private func handles(of m: Mark) -> [CGPoint] {
+        switch m.tool {
+        case .arrow, .rect, .mosaic, .spotlight: return [m.a, m.b]
+        case .highlight: return [m.a, CGPoint(x: m.b.x, y: m.a.y)]
+        case .magnify: return [m.b]
+        default: return []
+        }
+    }
+
+    /// 누른 자리의 맨 위 도형(자르기는 고르지 않음)
+    private func hit(_ p: CGPoint) -> Int? {
+        let t = tolerance
+        return marks.indices.reversed().first { i in
+            let m = marks[i]
+            switch m.tool {
+            case .crop: return false
+            case .arrow: return Self.distance(p, m.a, m.b) < t + 2 * scale
+            case .highlight: return Self.distance(p, m.a, CGPoint(x: m.b.x, y: m.a.y)) < t + 12 * scale
+            case .rect: // 테두리 근처만(안쪽을 눌러 새로 그릴 수 있게)
+                return m.rect.insetBy(dx: -t, dy: -t).contains(p) && !m.rect.insetBy(dx: t, dy: t).contains(p)
+            case .magnify:
+                return hypot(p.x - m.a.x, p.y - m.a.y) < m.radius + t || hypot(p.x - m.dest.x, p.y - m.dest.y) < 2 * m.radius + t
+            default: return bounds(of: m).insetBy(dx: -t, dy: -t).contains(p)
+            }
+        }
+    }
+
+    static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy
+        let t = len == 0 ? 0 : max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
+    func select(_ i: Int?) { if selected != i { selected = i } }
+
+    func deleteSelected() {
+        guard let i = selected else { return }
+        commit()
+        marks.remove(at: i)
+        selected = nil
+        onChange()
+    }
+
+    /// 색을 고르면 고른 도형에도 칠한다
+    func setColor(_ c: NSColor) {
+        color = c
+        guard let i = selected, marks[i].color != c else { return }
+        commit()
+        marks[i].color = c
+        needsDisplay = true
+    }
+
+    // MARK: 마우스
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         finishText()
         let p = toImage(convert(event.locationInWindow, from: nil))
-        // 돋보기 확대 원을 누르면 옮긴다
-        if let i = marks.lastIndex(where: { $0.tool == .magnify && hypot($0.dest.x - p.x, $0.dest.y - p.y) < $0.radius * 2 }) {
-            movingDest = i
+        // 고른 도형의 끝점·확대 원
+        if let i = selected {
+            let m = marks[i], t = tolerance
+            let hs = handles(of: m)
+            if m.tool == .magnify, hypot(p.x - m.b.x, p.y - m.b.y) < t { commit(); drag = .pointB; return }
+            if hs.count == 2 {
+                if hypot(p.x - hs[0].x, p.y - hs[0].y) < t { commit(); drag = .pointA; return }
+                if hypot(p.x - hs[1].x, p.y - hs[1].y) < t { commit(); drag = .pointB; return }
+            }
+        }
+        if let i = hit(p) {
+            let m = marks[i]
+            if event.clickCount == 2, m.tool == .text { editText(i); return }
+            selected = i
+            commit()
+            drag = m.tool == .magnify && hypot(p.x - m.dest.x, p.y - m.dest.y) < 2 * m.radius && hypot(p.x - m.a.x, p.y - m.a.y) > m.radius
+                ? .dest : .move(start: p, original: m)
             return
         }
+        select(nil)
         switch tool {
         case .text:
-            startText(at: convert(event.locationInWindow, from: nil), image: p)
+            startText(image: p, text: "", color: color)
         case .number:
-            add(Mark(tool: .number, a: p, b: p, color: color, number: marks.filter { $0.tool == .number }.count + 1))
+            add(Mark(tool: .number, a: p, b: p, color: color, number: (marks.filter { $0.tool == .number }.map(\.number).max() ?? 0) + 1))
         default:
             drafting = Mark(tool: tool, a: p, b: p, color: color)
         }
@@ -369,7 +489,20 @@ final class MarkCanvas: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let p = toImage(convert(event.locationInWindow, from: nil))
-        if let i = movingDest { marks[i].dest = p; needsDisplay = true; return }
+        if let d = drag, let i = selected {
+            switch d {
+            case let .move(start, o):
+                let dx = p.x - start.x, dy = p.y - start.y
+                marks[i].a = CGPoint(x: o.a.x + dx, y: o.a.y + dy)
+                marks[i].b = CGPoint(x: o.b.x + dx, y: o.b.y + dy)
+                marks[i].dest = CGPoint(x: o.dest.x + dx, y: o.dest.y + dy)
+            case .pointA: marks[i].a = p
+            case .pointB: marks[i].b = p
+            case .dest: marks[i].dest = p
+            }
+            needsDisplay = true
+            return
+        }
         guard var d = drafting else { return }
         d.b = p
         if d.tool == .magnify { d.dest = Self.magnifyDest(d, in: CGSize(width: base.width, height: base.height)) }
@@ -378,11 +511,22 @@ final class MarkCanvas: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if movingDest != nil { movingDest = nil; return }
+        if drag != nil {
+            drag = nil
+            // 눌렀다 떼기만 했으면 되돌리기 기록을 남기지 않는다
+            if undoStack.last.map({ $0.count == marks.count && zip($0, marks).allSatisfy { $0.a == $1.a && $0.b == $1.b && $0.dest == $1.dest } }) == true {
+                undoStack.removeLast()
+            }
+            onChange()
+            return
+        }
         guard let d = drafting else { return }
         drafting = nil
         let tiny = d.tool == .magnify ? hypot(d.b.x - d.a.x, d.b.y - d.a.y) < 4 : (abs(d.b.x - d.a.x) < 4 && abs(d.b.y - d.a.y) < 4)
-        if !tiny { add(d) } else { needsDisplay = true }
+        if !tiny {
+            add(d)
+            if d.tool != .crop { selected = marks.count - 1 }
+        } else { needsDisplay = true }
     }
 
     /// 확대 원 자리: 오른쪽 위, 이미지 밖으로 나가면 반대쪽
@@ -394,32 +538,62 @@ final class MarkCanvas: NSView {
         return CGPoint(x: x, y: y)
     }
 
-    private func add(_ m: Mark) {
-        marks.append(m)
+    // MARK: 되돌리기
+
+    /// 바꾸기 직전 상태를 남긴다
+    private func commit() {
+        undoStack.append(marks)
         redoStack.removeAll()
+    }
+
+    private func add(_ m: Mark) {
+        commit()
+        marks.append(m)
         needsDisplay = true
         onChange()
     }
 
     func undo() {
         finishText()
-        guard let m = marks.popLast() else { return }
-        redoStack.append(m)
-        needsDisplay = true
+        guard let prev = undoStack.popLast() else { return }
+        redoStack.append(marks)
+        marks = prev
+        selected = nil
         onChange()
     }
 
     func redo() {
-        guard let m = redoStack.popLast() else { return }
-        marks.append(m)
-        needsDisplay = true
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(marks)
+        marks = next
+        selected = nil
         onChange()
     }
 
-    private func startText(at viewPoint: NSPoint, image p: CGPoint) {
-        let f = NSTextField(frame: NSRect(x: viewPoint.x, y: viewPoint.y - 4, width: 220, height: 28))
+    // MARK: 글씨
+
+    private func viewPoint(_ p: CGPoint) -> NSPoint {
+        let l = layout
+        return NSPoint(x: l.frame.minX + (p.x - l.visible.minX) * l.k, y: l.frame.minY + (p.y - l.visible.minY) * l.k)
+    }
+
+    /// 더블클릭한 글씨를 다시 입력칸으로
+    private func editText(_ i: Int) {
+        let m = marks[i]
+        commit()
+        marks.remove(at: i)
+        selected = nil
+        startText(image: m.a, text: m.text, color: m.color, recorded: true)
+    }
+
+    private var textRecorded = false
+
+    private func startText(image p: CGPoint, text: String, color c: NSColor, recorded: Bool = false) {
+        let v = viewPoint(p)
+        let f = NSTextField(frame: NSRect(x: v.x - 3, y: v.y - 4, width: 240, height: 20 * scale * layout.k + 10))
         f.font = .systemFont(ofSize: 20 * scale * layout.k, weight: .semibold)
-        f.textColor = color
+        f.stringValue = text
+        f.textColor = c
         f.isBordered = true
         f.drawsBackground = false
         f.focusRingType = .none
@@ -430,6 +604,8 @@ final class MarkCanvas: NSView {
         window?.makeFirstResponder(f)
         editor = f
         editorPoint = p
+        textRecorded = recorded
+        needsDisplay = true
     }
 
     @objc private func textDone() {
@@ -444,6 +620,10 @@ final class MarkCanvas: NSView {
         let text = f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let c = f.textColor ?? color
         f.removeFromSuperview()
-        if !text.isEmpty { add(Mark(tool: .text, a: editorPoint, b: editorPoint, color: c, text: text)) }
+        guard !text.isEmpty else { needsDisplay = true; onChange(); return }
+        if !textRecorded { commit() }   // 다시 고친 글씨는 이미 기록함
+        marks.append(Mark(tool: .text, a: editorPoint, b: editorPoint, color: c, text: text))
+        needsDisplay = true
+        onChange()
     }
 }

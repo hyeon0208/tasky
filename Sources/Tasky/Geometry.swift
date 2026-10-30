@@ -559,6 +559,9 @@ enum SelfTest {
         check(SnapMath.rect(.topLeft, area: area, current: win) == CGRect(x: 0, y: 450, width: 720, height: 450), "창 정리 왼쪽 위 4분의 1")
         check(SnapMath.rect(.centerThird, area: area, current: win) == CGRect(x: 480, y: 0, width: 480, height: 900), "창 정리 가운데 3분의 1")
         check(SnapMath.rect(.lastTwoThirds, area: area, current: win) == CGRect(x: 480, y: 0, width: 960, height: 900), "창 정리 오른쪽 3분의 2")
+        check(SnapMath.rect(.smaller, area: area, current: CGRect(x: 100, y: 100, width: 800, height: 600)) == CGRect(x: 130, y: 130, width: 740, height: 540), "창 정리 작게")
+        check(SnapMath.rect(.larger, area: area, current: CGRect(x: 0, y: 100, width: 800, height: 600)) == CGRect(x: 0, y: 70, width: 860, height: 660), "창 정리 크게(화면 안으로)")
+        check(SnapMath.rect(.smaller, area: area, current: CGRect(x: 0, y: 0, width: 210, height: 160)) == CGRect(x: 5, y: 5, width: 200, height: 150), "창 정리 작게 최소 크기")
         let shifted = CGRect(x: 1440, y: 25, width: 1920, height: 1055)
         check(SnapMath.rect(.bottomHalf, area: shifted, current: win) == CGRect(x: 1440, y: 25, width: 1920, height: 527.5), "창 정리 원점이 0이 아닌 화면")
         var cyc = CGRect.zero, widths: [CGFloat] = []
