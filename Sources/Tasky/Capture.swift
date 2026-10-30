@@ -31,6 +31,7 @@ final class Capture {
     private(set) var status: [CaptureMode: SnapController.Status] = [:]
     var onChange: () -> Void = {}
     private var preview: CapturePreview?
+    private var busy = false   // 고르는 화면이 두 번 뜨지 않게
 
     static var enabled: Bool {
         get { UserDefaults.standard.bool(forKey: "captureEnabled") }
@@ -79,6 +80,8 @@ final class Capture {
     /// 찍기. 권한이 없으면 찍지 않고 안내한다(권한 없이 찍으면 배경만 나옴).
     func take(_ mode: CaptureMode) {
         guard Self.hasPermission else { askPermission(); return }
+        guard !busy else { return }
+        busy = true
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-cap-\(UUID().uuidString).png")
         var args = ["-x"]
         switch mode {
@@ -92,10 +95,10 @@ final class Capture {
         p.terminationHandler = { _ in
             let data = try? Data(contentsOf: file)
             try? FileManager.default.removeItem(at: file)
-            DispatchQueue.main.async { if let data, let image = NSImage(data: data) { self.captured(image, png: data) } }   // Esc 취소면 파일 없음
+            DispatchQueue.main.async { self.busy = false; if let data, let image = NSImage(data: data) { self.captured(image, png: data) } }   // Esc 취소면 파일 없음
         }
         // 메뉴에서 골랐을 때 메뉴가 사라진 뒤에 찍히게
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { try? p.run() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { if (try? p.run()) == nil { self.busy = false } }
     }
 
     private func captured(_ image: NSImage, png: Data) {
@@ -202,6 +205,7 @@ final class CapturePreview: NSView, NSDraggingSource {
     func close() {
         hideWork?.cancel()
         panel.orderOut(nil)
+        panel.contentView = nil   // 패널과 뷰가 서로 잡고 있어 끊어야 풀린다
     }
 
     private func scheduleHide(_ after: TimeInterval) {
@@ -225,6 +229,8 @@ final class CapturePreview: NSView, NSDraggingSource {
         let item = NSDraggingItem(pasteboardWriter: url as NSURL)
         item.setDraggingFrame(bounds, contents: image)
         beginDraggingSession(with: [item], event: event, source: self)
+        // 받는 앱이 다 복사할 시간을 두고 지운다
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { try? FileManager.default.removeItem(at: dir) }
     }
 
     override func mouseUp(with event: NSEvent) {

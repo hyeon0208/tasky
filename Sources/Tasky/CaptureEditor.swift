@@ -356,6 +356,7 @@ final class MarkCanvas: NSView {
     private var drag: Drag?
     private var editor: NSTextField?
     private var editorPoint: CGPoint = .zero
+    private var editorSize: CGFloat = 1
     var tool: MarkTool = .arrow { didSet { finishText(); select(nil) } }
     var color: NSColor = .systemRed
     var onChange: () -> Void = {}
@@ -564,8 +565,9 @@ final class MarkCanvas: NSView {
         if drag != nil {
             drag = nil
             // 눌렀다 떼기만 했으면 되돌리기 기록을 남기지 않는다
-            if undoStack.last.map({ $0.count == marks.count && zip($0, marks).allSatisfy { $0.a == $1.a && $0.b == $1.b && $0.dest == $1.dest } }) == true {
+            if undoStack.last.map({ $0.count == marks.count && zip($0, marks).allSatisfy { $0.a == $1.a && $0.b == $1.b && $0.dest == $1.dest && $0.size == $1.size } }) == true {
                 undoStack.removeLast()
+                redoStack = savedRedo
             }
             onChange()
             return
@@ -591,8 +593,11 @@ final class MarkCanvas: NSView {
     // MARK: 되돌리기
 
     /// 바꾸기 직전 상태를 남긴다
+    private var savedRedo: [[Mark]] = []   // 눌렀다 떼기만 했을 때 다시 하기를 되살린다
+
     private func commit() {
         undoStack.append(marks)
+        savedRedo = redoStack
         redoStack.removeAll()
     }
 
@@ -633,6 +638,7 @@ final class MarkCanvas: NSView {
         commit()
         marks.remove(at: i)
         selected = nil
+        editorSize = m.size
         startText(image: m.a, text: m.text, color: m.color, recorded: true)
     }
 
@@ -640,8 +646,8 @@ final class MarkCanvas: NSView {
 
     private func startText(image p: CGPoint, text: String, color c: NSColor, recorded: Bool = false) {
         let v = viewPoint(p)
-        let f = NSTextField(frame: NSRect(x: v.x - 3, y: v.y - 4, width: 240, height: 20 * scale * layout.k + 10))
-        f.font = .systemFont(ofSize: 20 * scale * layout.k, weight: .semibold)
+        let f = NSTextField(frame: NSRect(x: v.x - 3, y: v.y - 4, width: 240, height: 20 * scale * editorSize * layout.k + 10))
+        f.font = .systemFont(ofSize: 20 * scale * editorSize * layout.k, weight: .semibold)
         f.stringValue = text
         f.textColor = c
         f.isBordered = true
@@ -670,9 +676,11 @@ final class MarkCanvas: NSView {
         let text = f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let c = f.textColor ?? color
         f.removeFromSuperview()
+        let size = editorSize
+        editorSize = 1
         guard !text.isEmpty else { needsDisplay = true; onChange(); return }
         if !textRecorded { commit() }   // 다시 고친 글씨는 이미 기록함
-        marks.append(Mark(tool: .text, a: editorPoint, b: editorPoint, color: c, text: text))
+        marks.append(Mark(tool: .text, a: editorPoint, b: editorPoint, color: c, text: text, size: size))
         needsDisplay = true
         onChange()
     }
@@ -681,7 +689,7 @@ final class MarkCanvas: NSView {
 /// 화면에 고정한 이미지. 끌어서 옮기고, 스크롤로 크기, ⌥스크롤로 투명도. 더블클릭은 편집, Esc는 닫기.
 final class PinView: NSView {
     private static var open: [PinView] = []
-    private let panel: NSPanel
+    private let panel: FloatingPanel
     private let image: CGImage
     private let scale: CGFloat
     private var zoom: CGFloat = 1
@@ -693,14 +701,15 @@ final class PinView: NSView {
         self.scale = scale
         let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         let v = NSScreen.withMouse.visibleFrame
-        panel = NSPanel(contentRect: NSRect(x: v.midX - size.width / 2, y: v.midY - size.height / 2, width: size.width, height: size.height),
-                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = FloatingPanel(size: size)
+        panel.setFrameOrigin(NSPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2))
         super.init(frame: NSRect(origin: .zero, size: size))
-        panel.level = .floating
+        panel.keyable = true   // Esc를 받으려면
+        panel.isOpaque = true
+        panel.isMovable = true
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.becomesKeyOnlyIfNeeded = false
         wantsLayer = true
         layer?.contents = image
         layer?.contentsGravity = .resize
@@ -718,6 +727,7 @@ final class PinView: NSView {
 
     private func close() {
         panel.orderOut(nil)
+        panel.contentView = nil   // 패널과 뷰가 서로 잡고 있어 끊어야 풀린다
         Self.open.removeAll { $0 === self }
     }
 
