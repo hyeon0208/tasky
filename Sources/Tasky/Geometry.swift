@@ -502,6 +502,31 @@ enum SelfTest {
             let taken: Set = ["Tasky 캡처 2026-10-30 14.05.12.png", "Tasky 캡처 2026-10-30 14.05.12 2.png"]
             check(Capture.fileName(d) { taken.contains($0) } == "Tasky 캡처 2026-10-30 14.05.12 3.png", "캡처 이름 겹치면 번호")
         }
+        // F22 편집 창: 결과 크기·그린 자리 픽셀·자르기
+        do {
+            let ctx = CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.setFillColor(NSColor.white.cgColor); ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+            let base = ctx.makeImage()!
+            func pixel(_ img: CGImage, _ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) {
+                let c = CGContext(data: nil, width: img.width, height: img.height, bitsPerComponent: 8, bytesPerRow: img.width * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                c.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height))
+                let p = c.data!.assumingMemoryBound(to: UInt8.self) + ((img.height - 1 - y) * img.width + x) * 4
+                return (p[0], p[1], p[2])
+            }
+            let arrow = Mark(tool: .arrow, a: CGPoint(x: 10, y: 50), b: CGPoint(x: 90, y: 50))
+            let out = MarkRender.image(base: base, marks: [arrow], scale: 1)!
+            check(out.width == 100 && out.height == 100, "편집 결과 크기 = 원본")
+            check(pixel(out, 40, 50).1 < 200, "화살표 자리 픽셀이 바뀜")
+            check(pixel(out, 40, 90) == (255, 255, 255), "화살표 밖은 그대로")
+            let cropped = MarkRender.image(base: base, marks: [arrow, Mark(tool: .crop, a: CGPoint(x: 20, y: 20), b: CGPoint(x: 60, y: 50))], scale: 1)!
+            check(cropped.width == 40 && cropped.height == 30, "자르기 크기")
+            check(MarkRender.image(base: base, marks: [Mark(tool: .mosaic, a: .zero, b: CGPoint(x: 50, y: 50)),
+                                                       Mark(tool: .spotlight, a: CGPoint(x: 60, y: 60), b: CGPoint(x: 90, y: 90))], scale: 1) != nil, "모자이크·스포트라이트 그리기")
+            check(pixel(MarkRender.image(base: base, marks: [Mark(tool: .spotlight, a: CGPoint(x: 60, y: 60), b: CGPoint(x: 90, y: 90))], scale: 1)!, 10, 10).0 < 200,
+                  "스포트라이트 밖은 어두움")
+        }
         // F23 잠 안 자기
         do {
             let now = Date(timeIntervalSince1970: 0)

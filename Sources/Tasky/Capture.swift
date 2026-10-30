@@ -151,8 +151,7 @@ extension NSScreen {
     }
 }
 
-/// 화면 오른쪽 아래의 미리보기. 6초 뒤 사라지고, 마우스를 올리면 기다린다. 누르면 저장, 끌면 파일로 넘긴다.
-/// shortcut: 누르면 저장만 한다, 2단계(편집 창)에서 누르면 편집 창이 열리게 바꾼다.
+/// 화면 오른쪽 아래의 미리보기. 6초 뒤 사라지고, 마우스를 올리면 기다린다. 누르면 편집 창, 끌면 파일로 넘긴다.
 final class CapturePreview: NSView, NSDraggingSource {
     private let panel: NSPanel
     private let image: NSImage
@@ -192,7 +191,7 @@ final class CapturePreview: NSView, NSDraggingSource {
         note.frame = NSRect(x: 6, y: 6, width: w - 12, height: 18)
         addSubview(note)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-        setAccessibilityLabel("캡처 미리보기. 누르면 저장, 끌어서 다른 앱에 놓기")
+        setAccessibilityLabel("캡처 미리보기. 누르면 편집, 끌어서 다른 앱에 놓기")
         panel.contentView = self
         panel.orderFrontRegardless()
         scheduleHide(6)
@@ -231,12 +230,9 @@ final class CapturePreview: NSView, NSDraggingSource {
     override func mouseUp(with event: NSEvent) {
         guard down != nil else { return }
         down = nil
-        do {
-            try Capture.save(png)
-            show("저장됨")
-        } catch {
-            show("저장하지 못했어요")
-        }
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        close()
+        CaptureEditor.show(cg, scale: max(1, CGFloat(cg.width) / max(image.size.width, 1)))
     }
 
     private func show(_ text: String) {

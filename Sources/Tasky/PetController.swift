@@ -1165,7 +1165,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             [NSView(), NSStackView(views: [status, openPermission])],
             [NSView(), note("단축키 버튼을 누르고 새 키를 누르세요. ⌫는 지우기, Esc는 취소예요.")],
         ] + keyRows + [
-            [label("저장 폴더"), folder, note("미리보기를 누르면 여기에 PNG로 저장해요")],
+            [label("저장 폴더"), folder, note("편집 창에서 ⌘S를 누르면 여기에 PNG로 저장해요")],
         ])])
     }
 
