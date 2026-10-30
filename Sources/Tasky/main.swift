@@ -30,6 +30,13 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--render-bear"
 }
 
 RenameMigration.run()   // 옛 이름(Kongpod) 설정·폴더·훅을 처음 한 번 옮긴다
+// .app으로 실행할 때만: 훅·로그인 항목이 다른 실행 파일을 가리키면 이 앱으로 고친다(디버그 빌드와 번갈아 바뀌지 않게)
+if Bundle.main.bundlePath.hasSuffix(".app") {
+    for tool in [HookInstaller.Tool.claude, .codex] where HookInstaller.pointsElsewhere(tool) {
+        try? HookInstaller.set(tool, installed: true)
+    }
+    if LoginItem.isOn { LoginItem.set(true) }
+}
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // Dock 아이콘 없이 메뉴 막대에만
 let controller = App()

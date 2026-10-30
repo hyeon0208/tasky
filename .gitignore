@@ -9,3 +9,6 @@ DerivedData/
 
 # 외부에서 받은 참고 그림(저작권 확인 전 공개하지 않음)
 intent/F11-캐릭터-인터랙션/reference/
+
+# 앱 번들(scripts/make-app.sh)
+dist/

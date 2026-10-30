@@ -245,6 +245,13 @@ enum HookInstaller {
             (($0 as? [String: Any])?["command"] as? String)?.contains("Kongpod\" --hook") == true } } }
     }
 
+    /// 우리 훅이 지금 실행 파일이 아닌 곳(옛 폴더·옛 빌드)을 가리키는지
+    static func pointsElsewhere(_ tool: Tool) -> Bool {
+        guard let hooks = (try? read(tool))?["hooks"] as? [String: Any] else { return false }
+        return hooks.values.contains { (($0 as? [[String: Any]]) ?? []).contains { (($0["hooks"] as? [Any]) ?? []).contains {
+            isOurs($0) && ($0 as? [String: Any])?["command"] as? String != command(tool) } } }
+    }
+
     private static func read(_ tool: Tool) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: tool.file.path) else { return [:] }
         let data = try Data(contentsOf: tool.file)
