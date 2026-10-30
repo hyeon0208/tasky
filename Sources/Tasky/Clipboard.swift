@@ -245,30 +245,35 @@ final class HotKey {
     // 여러 단축키(F15 창 정리도 씀): id → 등록·동작
     private var refs: [UInt32: EventHotKeyRef] = [:]
     private var actions: [UInt32: () -> Void] = [:]
+    private var releases: [UInt32: () -> Void] = [:]
 
     /// 등록. 다른 앱이 같은 키를 쓰고 있으면 false.
-    func add(id: UInt32, keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) -> Bool {
+    /// release: 키를 뗄 때(꾹 누르기용)
+    func add(id: UInt32, keyCode: UInt32, modifiers: UInt32, release: (() -> Void)? = nil, action: @escaping () -> Void) -> Bool {
         remove(id: id)
         if handler == nil {
-            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            var specs = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                         EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
             InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
                 var hk = EventHotKeyID()
                 GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
-                let id = hk.id
-                DispatchQueue.main.async { HotKey.shared.actions[id]?() }
+                let id = hk.id, pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
+                DispatchQueue.main.async { pressed ? HotKey.shared.actions[id]?() : HotKey.shared.releases[id]?() }
                 return noErr
-            }, 1, &spec, nil, &handler)
+            }, 2, &specs, nil, &handler)
         }
         var ref: EventHotKeyRef?
         guard RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: OSType(0x5441534B), id: id), GetApplicationEventTarget(), 0, &ref) == noErr, let ref else { return false }   // 'TASK'
         refs[id] = ref
         actions[id] = action
+        releases[id] = release
         return true
     }
 
     func remove(id: UInt32) {
         if let r = refs.removeValue(forKey: id) { UnregisterEventHotKey(r) }
         actions[id] = nil
+        releases[id] = nil
     }
 
     /// "⌘⇧C" 같은 표시

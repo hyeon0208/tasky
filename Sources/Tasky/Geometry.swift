@@ -562,6 +562,18 @@ enum SelfTest {
         check(SnapMath.rect(.smaller, area: area, current: CGRect(x: 100, y: 100, width: 800, height: 600)) == CGRect(x: 130, y: 130, width: 740, height: 540), "창 정리 작게")
         check(SnapMath.rect(.larger, area: area, current: CGRect(x: 0, y: 100, width: 800, height: 600)) == CGRect(x: 0, y: 70, width: 860, height: 660), "창 정리 크게(화면 안으로)")
         check(SnapMath.rect(.smaller, area: area, current: CGRect(x: 0, y: 0, width: 210, height: 160)) == CGRect(x: 5, y: 5, width: 200, height: 150), "창 정리 작게 최소 크기")
+        do {   // 바탕화면 보기 키
+            var d = DesktopKey.State()
+            check(d.handle(.press, at: 0) == [.startHoldTimer] && d.handle(.holdTimer, at: 0.25) == [.toggle], "꾹 누르면 바탕화면")
+            check(d.handle(.press, at: 0.3) == [], "누르는 동안 반복 입력 무시")
+            check(d.handle(.release, at: 1) == [.toggle], "떼면 돌아옴")
+            check(d.handle(.press, at: 2) == [.startHoldTimer] && d.handle(.release, at: 2.1) == [.cancelHoldTimer], "짧게 한 번은 그대로")
+            check(d.handle(.press, at: 2.3) == [.toggle] && d.handle(.release, at: 2.4) == [.cancelHoldTimer], "두 번 누르면 바탕화면에 머묾")
+            check(d.handle(.holdTimer, at: 2.6) == [], "머무는 중 타이머 무시")
+            check(d.handle(.press, at: 5) == [.toggle], "머무는 중 다시 누르면 돌아옴")
+            _ = d.handle(.release, at: 5.1)
+            check(d.handle(.press, at: 5.3) == [.startHoldTimer], "돌아온 직후 누름은 두 번 누르기로 보지 않음")
+        }
         let shifted = CGRect(x: 1440, y: 25, width: 1920, height: 1055)
         check(SnapMath.rect(.bottomHalf, area: shifted, current: win) == CGRect(x: 1440, y: 25, width: 1920, height: 527.5), "창 정리 원점이 0이 아닌 화면")
         var cyc = CGRect.zero, widths: [CGFloat] = []

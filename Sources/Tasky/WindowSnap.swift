@@ -217,7 +217,10 @@ final class SnapController {
             if SystemHotKeys.conflicts(k, in: system) { status[a] = .system; continue }
             if SystemHotKeys.conflicts(k, in: used) { status[a] = .ours; continue }   // 클립보드나 앞 동작과 같은 키
             used.append(k)
-            status[a] = HotKey.shared.add(id: 100 + UInt32(i), keyCode: k.code, modifiers: k.mods) { [weak self] in self?.perform(a) } ? .ok : .taken
+            let release: (() -> Void)? = a == .desktop ? { [weak self] in self?.desktopKey.release() } : nil
+            status[a] = HotKey.shared.add(id: 100 + UInt32(i), keyCode: k.code, modifiers: k.mods, release: release) { [weak self] in
+                if a == .desktop { self?.desktopKey.press() } else { self?.perform(a) }
+            } ? .ok : .taken
         }
         if Self.dragOn { watchDrags() }
         onChange()
@@ -242,7 +245,7 @@ final class SnapController {
     }
 
     func perform(_ a: SnapAction) {
-        if a == .desktop { toggleDesktop(); return }
+        if a == .desktop { DesktopKey.toggle(); return }
         guard let w = AXWindow.focused() else { return }
         snap(w, a)
     }
@@ -274,26 +277,7 @@ final class SnapController {
         saved[key]?.last = AXWindow.frame(w) ?? t
     }
 
-    /// 바탕화면 보기: 다른 앱을 모두 숨기고, 다시 누르면 숨긴 앱만 되돌린다
-    private var hiddenApps: [NSRunningApplication] = []
-    private func toggleDesktop() {
-        let shown = hiddenApps.filter { !$0.isTerminated && $0.isHidden }
-        if !shown.isEmpty {
-            shown.forEach { $0.unhide() }
-            hiddenApps = []
-            return
-        }
-        hiddenApps = NSWorkspace.shared.runningApplications.filter {
-            $0.activationPolicy == .regular && !$0.isHidden && $0 != NSRunningApplication.current
-        }
-        // ⌥⌘H와 같은 시스템 동작: 앞에 있는 앱 빼고 모두 숨김. Tasky를 앞으로 올린 뒤 부르면 Tasky만 남는다
-        NSApp.activate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NSWorkspace.shared.hideOtherApplications()
-            // 그래도 남은 것(올리기 전에 앞에 있던 앱)은 하나씩
-            self.hiddenApps.filter { !$0.isHidden }.forEach { $0.hide() }
-        }
-    }
+    let desktopKey = DesktopKey()
 
     /// 다른 모니터로: 같은 비율 자리로, 크기는 새 화면에 맞게 줄인다
     static func displayRect(cur: CGRect, from: CGRect, to: CGRect) -> CGRect {
@@ -380,4 +364,72 @@ final class SnapController {
 
 private extension CGRect {
     var area: CGFloat { isNull ? 0 : width * height }
+}
+
+/// 바탕화면 보기 키: 꾹 누르는 동안만 보기, 두 번 누르면 바탕화면에 머물기, 머무는 중 다시 누르면 돌아오기.
+/// 화면은 macOS '데스크탑 보기'(Mission Control)와 같은 동작이라 모든 창이 옆으로 비켜난다.
+final class DesktopKey {
+    enum Event { case press, release, holdTimer }
+    enum Effect: Equatable { case none, toggle, startHoldTimer, cancelHoldTimer }
+
+    /// 상태 전이(순수, 자체 검사 대상)
+    struct State {
+        var down = false, peeking = false, staying = false
+        /// 이번 누름이 머물기를 끈 것(뗄 때 두 번 누르기의 첫 번째로 세지 않음)
+        var restoring = false
+        var lastTap: TimeInterval = -1
+
+        static let hold: TimeInterval = 0.25, doubleTap: TimeInterval = 0.35
+
+        mutating func handle(_ e: Event, at now: TimeInterval) -> [Effect] {
+            switch e {
+            case .press:
+                guard !down else { return [] }   // 누르고 있는 동안 반복 입력은 무시
+                down = true
+                if staying { staying = false; restoring = true; lastTap = -1; return [.toggle] }
+                if lastTap >= 0, now - lastTap < Self.doubleTap { staying = true; lastTap = -1; return [.toggle] }
+                return [.startHoldTimer]
+            case .holdTimer:
+                guard down, !staying, !peeking else { return [] }
+                peeking = true
+                return [.toggle]
+            case .release:
+                guard down else { return [] }
+                down = false
+                if peeking { peeking = false; lastTap = -1; return [.toggle] }
+                if !staying && !restoring { lastTap = now }
+                restoring = false
+                return [.cancelHoldTimer]
+            }
+        }
+    }
+
+    private var state = State()
+    private var timer: DispatchWorkItem?
+
+    func press() { run(.press) }
+    func release() { run(.release) }
+
+    private func run(_ e: Event) {
+        for effect in state.handle(e, at: ProcessInfo.processInfo.systemUptime) {
+            switch effect {
+            case .toggle: Self.toggle()
+            case .startHoldTimer:
+                let w = DispatchWorkItem { [weak self] in self?.run(.holdTimer) }
+                timer = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + State.hold, execute: w)
+            case .cancelHoldTimer: timer?.cancel()
+            case .none: break
+            }
+        }
+    }
+
+    /// macOS 데스크탑 보기 켜기/끄기(같은 신호가 번갈아 바꾼다).
+    /// shortcut: Dock의 비공개 함수라 macOS가 바꾸면 동작하지 않을 수 있다, 그때 공개 방법을 다시 찾는다.
+    static func toggle() {
+        typealias Send = @convention(c) (CFString, UnsafeMutableRawPointer?) -> Int32
+        guard let h = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY),
+              let f = dlsym(h, "CoreDockSendNotification") else { return }
+        _ = unsafeBitCast(f, to: Send.self)("com.apple.showdesktop.awake" as CFString, nil)
+    }
 }
