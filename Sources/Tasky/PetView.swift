@@ -62,6 +62,8 @@ final class PetView: NSView {
         /// F26: 접힌 가로 알약에 칩, 라이트·다크
         var glance = Glance()
         var dark = true
+        /// F27 펼친 '미니 오늘' 줄(최대 3): 할 일·다음 일정
+        var rows: [String] = []
     }
     var island: Island? {
         didSet {
@@ -121,7 +123,6 @@ final class PetView: NSView {
     /// 몸 안의 콩알(작업 상태 색). 최대 5개.
     var beans: [NSColor] = [] { didSet { needsDisplay = true } }
     /// F26 5차: AI 작업 유리 배지(곰 오른쪽 아래 발치). nil이면 숨김. 알약일 때는 알약이 점으로 보여 준다
-    let agentBadge = AgentBadgeView(frame: .zero)
     /// 펫마다 다른 몸 색: 민트·살구·라일락·크림
     var bodyColor = PetView.defaultColors[0] { didSet { needsDisplay = true } }
     static let defaultColors: [NSColor] = [
@@ -167,11 +168,6 @@ final class PetView: NSView {
         faceLayer.position = CGPoint(x: r.width / 2, y: r.height / 2 - r.height * Self.floor)
         let e = bounds.width * 0.26
         effectLayer.frame = CGRect(x: bounds.width * 0.7, y: bounds.height * 0.72, width: e, height: e)
-        if agentBadge.superview !== self { addSubview(agentBadge); agentBadge.layer?.zPosition = 20 }
-        // F26 6차 P4: 곰 몸을 가리지 않게 오른쪽 아래 발치(바닥 높이)에 작게 둔다
-        let b = max(24, min(36, bounds.width * 0.22))
-        agentBadge.frame = CGRect(x: bounds.maxX - b, y: 0, width: b, height: b)
-        agentBadge.alphaValue = island == nil ? 1 : 0
         CATransaction.commit()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -200,64 +196,7 @@ final class PetView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         if let island { drawIsland(island) }
-        guard faceLayer.contents == nil, bear == nil else { return }   // 캐릭터 그림·3D면 콩깍지를 그리지 않는다
-        let ctx = NSGraphicsContext.current!.cgContext
-        // 알약 안에서는 얼굴 칸에 콩깍지 비율(120×84)로
-        let r = island == nil ? bounds : iconRect.insetBy(dx: 0, dy: iconRect.height * 0.15)
-        ctx.translateBy(x: r.minX, y: r.minY)
-        if mirrored { ctx.translateBy(x: r.width, y: 0); ctx.scaleBy(x: -1, y: 1) }
-        // 기준 크기(120×84)로 그리고 펫 크기에 맞춰 늘린다
-        ctx.scaleBy(x: r.width / 120, y: r.height / 84)
-        let body = CGRect(x: 0, y: 0, width: 120, height: 84).insetBy(dx: 8, dy: 12)
-        let pod = NSBezierPath(roundedRect: body, xRadius: body.height / 2, yRadius: body.height / 2)
-        bodyColor.setFill()
-        pod.fill()
-        NSColor(red: 0.23, green: 0.45, blue: 0.27, alpha: 1).setStroke()
-        pod.lineWidth = 2.5
-        pod.stroke()
-
-        let seam = NSBezierPath()
-        seam.move(to: CGPoint(x: body.minX + body.width * 0.3, y: body.midY - 2))
-        seam.curve(to: CGPoint(x: body.maxX - 12, y: body.midY - 1),
-                   controlPoint1: CGPoint(x: body.midX, y: body.midY - 8),
-                   controlPoint2: CGPoint(x: body.maxX - 30, y: body.midY - 6))
-        NSColor(red: 0.23, green: 0.45, blue: 0.27, alpha: 0.35).setStroke()
-        seam.lineWidth = 1.5
-        seam.stroke()
-
-        for (i, color) in beans.prefix(5).enumerated() {
-            color.setFill()
-            let x = body.minX + body.width * 0.42 + CGFloat(i) * 11
-            NSBezierPath(ovalIn: CGRect(x: x, y: body.midY - 12, width: 9, height: 9)).fill()
-        }
-
-        if holdingBowl {
-            // 몸 아래쪽에 겹쳐 그린 작은 그릇 (실제 자세는 디자인 에셋 때)
-            let bowl = NSBezierPath()
-            let cx = body.midX + 8, top = body.minY + 14
-            bowl.move(to: CGPoint(x: cx - 20, y: top))
-            bowl.curve(to: CGPoint(x: cx + 20, y: top), controlPoint1: CGPoint(x: cx - 18, y: top - 20), controlPoint2: CGPoint(x: cx + 18, y: top - 20))
-            bowl.close()
-            NSColor(red: 0.76, green: 0.58, blue: 0.32, alpha: 1).setFill()
-            bowl.fill()
-            NSColor(red: 0.55, green: 0.38, blue: 0.18, alpha: 1).setStroke()
-            bowl.lineWidth = 1.5
-            bowl.stroke()
-        }
-
-        NSColor(red: 0.11, green: 0.14, blue: 0.12, alpha: 1).setFill()
-        for dx in [CGFloat(18), 32] {
-            NSBezierPath(ovalIn: CGRect(x: body.minX + dx, y: body.midY + 6, width: 6, height: 6)).fill()
-        }
-        let mouth = NSBezierPath()
-        mouth.move(to: CGPoint(x: body.minX + 22, y: body.midY))
-        mouth.curve(to: CGPoint(x: body.minX + 32, y: body.midY),
-                    controlPoint1: CGPoint(x: body.minX + 25, y: body.midY - 4),
-                    controlPoint2: CGPoint(x: body.minX + 29, y: body.midY - 4))
-        NSColor(red: 0.11, green: 0.14, blue: 0.12, alpha: 1).setStroke()
-        mouth.lineWidth = 1.8
-        mouth.lineCapStyle = .round
-        mouth.stroke()
+        // F28: 콩깍지 그림은 지웠다(캐릭터는 테디 하나)
     }
 
     /// 검은 알약 + (접힘) 작업 색 점 / (펼침) 시계·작업 한 줄
@@ -271,21 +210,52 @@ final class PetView: NSView {
         if let b = i.border { b.setStroke(); pill.lineWidth = 2; pill.stroke() }
         let icon = iconRect
         if i.expanded {
-            let x = icon.maxX + 10, w = bounds.width - x - 12
+            // F27 미니 오늘: 시계 · 요약 한 줄 · 할 일/일정 최대 3줄
+            let x = icon.maxX + 10, w = bounds.width - x - 14
             let para = NSMutableParagraphStyle()
             para.lineBreakMode = .byTruncatingTail
-            NSAttributedString(string: i.clock, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold),
+            var y = bounds.maxY - 14 - 20
+            NSAttributedString(string: i.clock, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .bold),
                                                             .foregroundColor: ink])
-                .draw(in: CGRect(x: x, y: bounds.midY + 1, width: w, height: 20))
-            NSAttributedString(string: i.line, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .draw(in: CGRect(x: x, y: y, width: w, height: 20))
+            y -= 17
+            NSAttributedString(string: i.line, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold),
                                                            .foregroundColor: i.lineColor, .paragraphStyle: para])
-                .draw(in: CGRect(x: x, y: bounds.midY - 17, width: w, height: 15))
+                .draw(in: CGRect(x: x, y: y, width: w, height: 15))
+            for row in i.rows {
+                y -= 19
+                guard y > 6 else { break }
+                ink.withAlphaComponent(0.35).setStroke()
+                let c = NSBezierPath(ovalIn: CGRect(x: x, y: y + 3, width: 9, height: 9)); c.lineWidth = 1.2; c.stroke()
+                NSAttributedString(string: row, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                                                            .foregroundColor: ink.withAlphaComponent(0.85), .paragraphStyle: para])
+                    .draw(in: CGRect(x: x + 16, y: y, width: w - 16, height: 16))
+            }
             return
         }
         // F26: 가로 알약은 칩 줄(할 일 수·다음 일정·상태 점)
         if !i.vertical {
             GlanceChips.draw(i.glance, at: CGPoint(x: icon.maxX + 6, y: bounds.midY - GlanceChips.height / 2), dark: i.dark)
             return
+        }
+        // F28: 옆 세로 알약도 할 일 수·다음 일정 시각을 위에서 아래로(위 알약의 칩과 같은 내용)
+        if i.vertical {
+            var y = icon.minY - 6
+            let accent = i.dark ? NSColor(red: 0.45, green: 0.68, blue: 1, alpha: 1) : NSColor(red: 0.12, green: 0.39, blue: 0.92, alpha: 1)
+            let para = NSMutableParagraphStyle(); para.alignment = .center
+            func item(_ symbol: String, _ text: String, _ color: NSColor) {
+                if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(.init(pointSize: 10, weight: .bold).applying(.init(paletteColors: [color]))) {
+                    y -= 12; img.draw(in: CGRect(x: bounds.midX - 6, y: y, width: 12, height: 12))
+                }
+                y -= 13
+                NSAttributedString(string: text, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .bold), .foregroundColor: color, .paragraphStyle: para])
+                    .draw(in: CGRect(x: 0, y: y, width: bounds.width, height: 12))
+                y -= 4
+            }
+            if i.glance.showsTasks { item("checkmark.square", "\(i.glance.tasks)", accent) }
+            if let t = i.glance.next.split(separator: " ").first { item("calendar", String(t), ink) }
+            if i.glance.showsTasks || !i.glance.next.isEmpty { return }
         }
         let d: CGFloat = 6, step: CGFloat = 10
         func spot(_ k: Int) -> CGPoint {
@@ -313,6 +283,38 @@ final class PetView: NSView {
     private let bodyLayer = CALayer()
     private let faceLayer = CALayer()
     private let effectLayer = CALayer()
+    /// F28 13차 C+E: 지금 보여 주는 감정 그림. 바뀔 때마다 빛나는 입자 3개가 어긋나게 천천히 떠오르며 사라진다
+    private var effectImage: NSImage?
+    private func setEffect(_ img: NSImage?) {
+        guard img !== effectImage else { return }
+        effectImage = img
+        effectLayer.contents = nil
+        effectLayer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        guard let img else { return }
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let b = effectLayer.bounds
+        let specs: [(dx: CGFloat, scale: CGFloat, delay: Double)] = reduce ? [(0, 1, 0)] : [(-0.2, 0.7, 0), (0.15, 1, 0.45), (-0.05, 0.85, 0.9)]
+        for (i, sp) in specs.enumerated() {
+            let l = CALayer()
+            l.contents = img; l.contentsGravity = .resizeAspect
+            let side = b.width * sp.scale
+            l.frame = CGRect(x: b.midX - side / 2 + sp.dx * b.width, y: 0, width: side, height: side)
+            l.opacity = 0
+            effectLayer.addSublayer(l)
+            let g = CAAnimationGroup()
+            g.duration = reduce ? 1.2 : 3; g.beginTime = CACurrentMediaTime() + sp.delay
+            g.repeatCount = .infinity; g.fillMode = .backwards
+            g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            let fade = CAKeyframeAnimation(keyPath: "opacity"); fade.values = [0, 1, 1, 0]; fade.keyTimes = [0, 0.2, 0.6, 1]
+            if reduce { g.animations = [fade] } else {
+                let rise = CABasicAnimation(keyPath: "position.y"); rise.byValue = b.height * 1.4
+                let drift = CABasicAnimation(keyPath: "position.x"); drift.byValue = (i % 2 == 0 ? 1 : -1) * b.width * 0.15
+                let sc = CAKeyframeAnimation(keyPath: "transform.scale"); sc.values = [0.4, 1, 1.1]; sc.keyTimes = [0, 0.25, 1]
+                g.animations = [fade, rise, drift, sc]
+            }
+            l.add(g, forKey: "drift")
+        }
+    }
     var character: Character? { didSet { show(); updateBreathing() } }
     /// 바탕 상황. 잠깐 반응이 끝나면 이리로 돌아온다.
     var base: Situation = .idle { didSet { if base != oldValue, transient == nil { show() } } }
@@ -342,9 +344,21 @@ final class PetView: NSView {
     override func mouseUp(with event: NSEvent) {
         defer { downPoint = nil; dragging = false }
         if dragging { delegate?.petDragEnded(); return }
-        // 한 번은 바로 처리하고(기다림 없음), 두 번째 누르기가 오면 빠른 실행이 앞 것을 닫고 연다
-        if event.clickCount >= 2 { delegate?.petDoubleClicked() } else { delegate?.petClicked() }
+        // F27: 한 번 = 원형 메뉴, 두 번 = 오늘 카드. 두 번 누르기는 0.22초 안에 다시 눌렀을 때만(시스템 간격보다 짧게)
+        let now = ProcessInfo.processInfo.systemUptime
+        if let pending = pendingClick, now - lastClickUp < Self.doubleClickWindow {
+            pending.cancel(); pendingClick = nil
+            delegate?.petDoubleClicked()
+            return
+        }
+        lastClickUp = now
+        let work = DispatchWorkItem { [weak self] in self?.pendingClick = nil; self?.delegate?.petClicked() }
+        pendingClick = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.doubleClickWindow, execute: work)
     }
+    static let doubleClickWindow: TimeInterval = 0.22
+    private var pendingClick: DispatchWorkItem?
+    private var lastClickUp: TimeInterval = 0
 
     // MARK: 호버와 쓰다듬기
 
@@ -454,12 +468,12 @@ extension PetView {
         guard showsCharacter else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        effectLayer.contents = effect.image
+        setEffect(effect.image)
         CATransaction.commit()
-        let shown = effectLayer.contents as AnyObject?
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self, (self.effectLayer.contents as AnyObject?) === shown else { return }
-            self.effectLayer.contents = self.showsCharacter ? Reaction.of(self.transient ?? self.base).effect?.image : nil
+        let shown = effectImage
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak self] in
+            guard let self, self.effectImage === shown else { return }
+            self.setEffect(self.showsCharacter ? Reaction.of(self.transient ?? self.base).effect?.image : nil)
         }
     }
 
@@ -476,7 +490,7 @@ extension PetView {
             bear.situation = s
             bear.facingRight = walkingRight
             faceLayer.contents = nil
-            effectLayer.contents = Reaction.of(s).effect?.image
+            setEffect(Reaction.of(s).effect?.image)
             needsDisplay = true
             return
         }
@@ -486,13 +500,8 @@ extension PetView {
         CATransaction.setDisableActions(true)
         let flip = (s == .walk && walkingRight) || r.motion == .turn
         faceLayer.setAffineTransform(flip ? CGAffineTransform(scaleX: -1, y: 1) : .identity)
-        effectLayer.contents = faceLayer.contents == nil ? nil : r.effect?.image
+        setEffect(faceLayer.contents == nil ? nil : r.effect?.image)
         CATransaction.commit()
-        if effectLayer.contents != nil {
-            let a = CABasicAnimation(keyPath: "opacity")
-            a.fromValue = 0; a.toValue = 1; a.duration = 0.15
-            effectLayer.add(a, forKey: "in")
-        }
         needsDisplay = true
         animate(faceLayer.contents == nil ? .none : r.motion)
         walkTimer?.invalidate()

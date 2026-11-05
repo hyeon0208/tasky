@@ -144,6 +144,45 @@ enum TaskLogic {
         return g.today + g.undated
     }
 
+    /// F27 오늘 카드 일정: 지금(시작 5분 지난 것까지)부터 `days`일 뒤 자정 전까지, 시간 순
+    static func upcomingEvents(_ items: [TaskItem], now: Date, days: Int, calendar: Calendar = .current) -> [TaskItem] {
+        let end = calendar.date(byAdding: .day, value: max(1, days), to: calendar.startOfDay(for: now))!
+        return items.filter { i in
+            guard i.isEvent, let d = i.date else { return false }
+            return d < end && (i.hasTime ? d >= now.addingTimeInterval(-300) : d >= calendar.startOfDay(for: now))
+        }.sorted { $0.date! < $1.date! }
+    }
+
+    /// F27 일정 알림 단계(분 전)
+    /// F28: 30분 전은 뺐다 — 사용자가 1시간 전 알림에서 '다시 알려 줘요'로 직접 정한다(사용자 결정 2026-11-06)
+    static let eventStages = [60, 0]
+
+    /// F27: 지금 띄울 일정 알림. 시작 1시간 전부터 시작 2분 뒤까지, 지난 단계 중 가장 최근 것 하나만.
+    /// `keys`는 이번에 지난 모든 단계(늦게 켜져도 앞 단계를 다시 띄우지 않게).
+    static func eventAlerts(_ items: [TaskItem], now: Date, sent: Set<String>) -> [(item: TaskItem, minutes: Int, keys: [String])] {
+        items.compactMap { item in
+            guard item.isEvent, item.hasTime, let d = item.date,
+                  now >= d.addingTimeInterval(-Double(eventStages[0]) * 60), now < d.addingTimeInterval(120) else { return nil }
+            let fired = eventStages.filter { d.addingTimeInterval(-Double($0) * 60) <= now }
+            guard let latest = fired.min() else { return nil }
+            let key = { (m: Int) in "\(item.id)@\(Int(d.timeIntervalSince1970))#\(m)" }
+            guard !sent.contains(key(latest)) else { return nil }
+            return (item, latest, fired.map(key))
+        }
+    }
+
+    /// F27: N분마다 남은 할 일 알림(0 = 끄기, 남은 게 없으면 안 띄움)
+    static func nudgeDue(remaining: Int, last: Date, now: Date, minutes: Int) -> Bool {
+        minutes > 0 && remaining > 0 && now.timeIntervalSince(last) >= Double(minutes) * 60
+    }
+
+    /// 알림 패널 윗줄: "1시간 뒤 일정" · "30분 뒤 일정" · "지금 시작해요"
+    static func eventLead(start: Date, now: Date) -> String {
+        let m = Int((start.timeIntervalSince(now) / 60).rounded())
+        if m <= 0 { return "지금 시작해요" }
+        return m >= 60 ? "\(m / 60)시간\(m % 60 == 0 ? "" : " \(m % 60)분") 뒤 일정" : "\(m)분 뒤 일정"
+    }
+
     static func alertKey(_ item: TaskItem, at date: Date?) -> String? {
         date.map { "\(item.id)@\(Int($0.timeIntervalSince1970))" }
     }
@@ -173,6 +212,16 @@ final class TaskStore {
         set { UserDefaults.standard.set(newValue, forKey: "tasksSound") }
     }
     static var anyOn: Bool { remindersOn || eventsOn }
+    /// F27: 일정을 며칠 뒤까지 볼지(1~7, 기본 7)
+    static var eventDays: Int {
+        get { min(7, max(1, UserDefaults.standard.object(forKey: "eventDays") as? Int ?? 7)) }
+        set { UserDefaults.standard.set(min(7, max(1, newValue)), forKey: "eventDays"); shared.onChange() }
+    }
+    /// F27: 남은 할 일을 몇 분마다 알릴지(0 = 끄기, 기본 60)
+    static var nudgeMinutes: Int {
+        get { UserDefaults.standard.object(forKey: "nudgeMinutes") as? Int ?? 60 }
+        set { UserDefaults.standard.set(max(0, newValue), forKey: "nudgeMinutes") }
+    }
 
     /// 번들로 실행했고 권한 설명 키가 있어야 요청할 수 있다(없으면 요청 시 앱이 죽을 수 있음).
     static func canAsk(_ type: EKEntityType) -> Bool {
@@ -195,7 +244,15 @@ final class TaskStore {
     }
 
     /// 켜져 있고 권한이 있으면 읽고 바깥 변경을 감시한다. 앱 시작 때도 부른다(권한 창은 띄우지 않음).
+    private var asking: Set<EKEntityType> = []
+
     func start() {
+        // 켜 둔 채인데 권한이 아직 정해지지 않았으면(권한 초기화·앱 서명 변경 뒤) 다시 묻는다
+        for (type, on) in [(EKEntityType.reminder, Self.remindersOn), (.event, Self.eventsOn)]
+            where on && Self.canAsk(type) && EKEventStore.authorizationStatus(for: type) == .notDetermined && !asking.contains(type) {
+            asking.insert(type)
+            setEnabled(type, true) { [weak self] in self?.asking.remove(type); self?.reload() }
+        }
         if !observing, Self.anyOn {
             observing = true
             NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in self?.reload() }
@@ -355,17 +412,44 @@ final class TaskStore {
 
 // MARK: - 펫 반응 (macOS 알림은 미리 알림·캘린더 앱이 보낸다, 사용자 결정 2026-11-03)
 
+/// F27 알림 패널에 띄울 것
+enum TaskNotice {
+    case event(TaskItem, minutes: Int)   // 60·30·0분 전
+    case todo(TaskItem)                  // 시각을 정한 할 일
+    case nudge([TaskItem])               // N분마다 남은 할 일
+    var eventID: String? { if case .event(let i, _) = self { return i.id }; return nil }
+}
+
 final class TaskAlerts {
     static let shared = TaskAlerts()
     /// 보이는 첫 펫이 받는다(App이 연결).
-    var onDue: (TaskItem) -> Void = { _ in }
+    var onDue: (TaskNotice) -> Void = { _ in }
     private var timer: Timer?
-    private var alerted: Set<String> = []
+    /// 이미 띄운 알림·끈 일정. 앱을 다시 켜도 같은 알림을 또 띄우지 않게 저장한다(F28: 다시 켤 때마다 다시 왔다)
+    private var alerted: Set<String> = TaskAlerts.load("taskAlerted") { didSet { TaskAlerts.save(alerted, "taskAlerted") } }
     private var snoozed: [String: Date] = [:]
+    private var lastNudge = Date()
+    /// 일정 '다시 알려 줘요': 다시 띄울 시각
+    private var again: [(at: Date, item: TaskItem)] = []
+    /// '알겠어요(알림 끄기)'를 누른 일정(id@시작) — 시작 알림도 오지 않는다
+    private var muted: Set<String> = TaskAlerts.load("taskMuted") { didSet { TaskAlerts.save(muted, "taskMuted") } }
+
+    /// 키 끝의 시각(…@초 또는 …@초#단계)이 이틀 넘게 지난 것은 버린다
+    static func pruned(_ keys: Set<String>, now: Date) -> Set<String> {
+        keys.filter { k in
+            let tail = k.split(separator: "@").last.map { $0.split(separator: "#").first.map(String.init) ?? "" } ?? ""
+            guard let t = Double(tail) else { return true }
+            return t > now.timeIntervalSince1970 - 2 * 86400
+        }
+    }
+    private static func load(_ key: String) -> Set<String> { pruned(Set(UserDefaults.standard.stringArray(forKey: key) ?? []), now: Date()) }
+    private static func save(_ set: Set<String>, _ key: String) { UserDefaults.standard.set(Array(set), forKey: key) }
+    static func muteKey(_ i: TaskItem) -> String { "\(i.id)@\(Int(i.date?.timeIntervalSince1970 ?? 0))" }
 
     func apply() {
         timer?.invalidate(); timer = nil
         guard TaskStore.anyOn else { return }
+        lastNudge = Date()
         timer = Ticker.every("할 일 알림", 30) { [weak self] _ in self?.check() }
         check()
     }
@@ -378,61 +462,241 @@ final class TaskAlerts {
             lastReload = now
             TaskStore.shared.reload()   // 결과는 비동기로 오므로 다음 확인부터 반영
         }
-        for item in TaskLogic.due(TaskStore.shared.items, now: now, alerted: alerted, snoozed: snoozed) {
+        let items = TaskStore.shared.items
+        for a in TaskLogic.eventAlerts(items, now: now, sent: alerted) {
+            alerted.formUnion(a.keys)
+            if !muted.contains(Self.muteKey(a.item)) { post(.event(a.item, minutes: a.minutes)) }
+        }
+        for (i, a) in again.enumerated().reversed() where a.at <= now {
+            again.remove(at: i)
+            if !muted.contains(Self.muteKey(a.item)) { post(.event(a.item, minutes: max(0, Int((a.item.date ?? now).timeIntervalSince(now) / 60)))) }
+        }
+        for item in TaskLogic.due(items.filter { !$0.isEvent }, now: now, alerted: alerted, snoozed: snoozed) {
             if let key = TaskLogic.alertKey(item, at: snoozed[item.id] ?? item.date) { alerted.insert(key) }
-            onDue(item)
+            post(.todo(item))
+        }
+        let pending = TaskLogic.pending(items, now: now)
+        if TaskLogic.nudgeDue(remaining: pending.count, last: lastNudge, now: now, minutes: TaskStore.nudgeMinutes) {
+            lastNudge = now
+            post(.nudge(pending))
         }
     }
 
-    func snooze(_ item: TaskItem) {
-        let t = Date().addingTimeInterval(600)
+    /// 집중 모드면 띄우지 않는다(F27)
+    private func post(_ n: TaskNotice) {
+        guard !FocusState.isOn else { return }
+        onDue(n)
+    }
+
+    /// 알겠어요(알림 끄기): 이 일정의 남은 알림(시작할 때 포함)을 보내지 않는다
+    func mute(_ item: TaskItem) { muted.insert(Self.muteKey(item)); again.removeAll { $0.item.id == item.id } }
+
+    func snooze(_ item: TaskItem, minutes: Int = 10) {
+        let t = Date().addingTimeInterval(Double(minutes) * 60)
+        if item.isEvent { again.append((t, item)); return }
         snoozed[item.id] = t
         TaskStore.shared.snooze(item, until: t)
     }
+
+    /// '나중에': 다음 알림까지 처음부터 다시 센다
+    func nudgeLater() { lastNudge = Date() }
 }
 
-/// 펫 옆에 뜨는 작은 알림(포커스를 뺏지 않음): 제목 + 완료/확인 · 10분 뒤
+/// F27 알림 패널 C '지금 하나에 집중': 펫 옆, 포커스를 뺏지 않음. 한 번에 하나, 나머지는 줄을 선다.
 final class TaskAlertPanel {
     private static var current: TaskAlertPanel?
+    private static var queue: [(TaskNotice, CGRect, CGRect)] = []
     private let panel: FloatingPanel
+    private let notice: TaskNotice
 
-    /// F26 알림 문구: 짧고 다정하게
-    static func headline(_ item: TaskItem) -> String { item.isEvent ? "곧 시작해요" : "할 시간이에요" }
-
-    static func show(_ item: TaskItem, nextTo petFrame: CGRect, in v: CGRect) {
-        current?.panel.orderOut(nil)
-        current = TaskAlertPanel(item, petFrame, v)
+    static func show(_ n: TaskNotice, nextTo petFrame: CGRect, in v: CGRect) {
+        if let c = current {
+            // 같은 일정의 다음 단계면 바꿔 끼운다(쌓지 않음)
+            if let id = n.eventID, c.notice.eventID == id { c.close(next: false) } else {
+                queue.removeAll { q in n.eventID != nil && q.0.eventID == n.eventID }
+                queue.append((n, petFrame, v)); return
+            }
+        }
+        current = TaskAlertPanel(n, petFrame, v)
     }
 
-    private init(_ item: TaskItem, _ petFrame: CGRect, _ v: CGRect) {
-        let size = CGSize(width: 260, height: 78)
-        let shown = petFrame.intersection(v).isNull ? petFrame : petFrame.intersection(v)
-        var x = shown.midX > v.midX ? shown.minX - size.width - 8 : shown.maxX + 8
-        x = min(max(x, v.minX + 8), v.maxX - size.width - 8)
-        let y = min(max(shown.midY - size.height / 2, v.minY + 8), v.maxY - size.height - 8)
-        panel = FloatingPanel(size: size)
-        panel.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: false)
-        let effect = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
-        effect.material = .hudWindow; effect.state = .active
-        effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true
+    /// 윗줄·제목·아랫줄·주 버튼
+    static func texts(_ n: TaskNotice, now: Date) -> (lead: String, title: String, sub: String, main: String) {
+        switch n {
+        case .event(let i, _):
+            let start = (i.date ?? now).timeIntervalSince(now) < 60
+            return (TaskLogic.eventLead(start: i.date ?? now, now: now), i.title, i.date.map { TaskWindow.timeText($0, hasTime: true) } ?? "", start ? "알겠어요" : "알겠어요 (알림 끄기)")
+        case .todo(let i):
+            return ("지금 할 일", i.title, i.date.map { TaskWindow.timeText($0, hasTime: true) } ?? "", "끝냈어요")
+        case .nudge(let list):
+            return ("남은 할 일 \(list.count)개", list.first?.title ?? "", list.first.flatMap { $0.date.map { TaskWindow.timeText($0, hasTime: $0 != Calendar.current.startOfDay(for: $0)) } } ?? "날짜 없음", "끝냈어요")
+        }
+    }
 
-        let title = NSTextField(labelWithString: item.title)
-        title.font = .boldSystemFont(ofSize: 13); title.lineBreakMode = .byTruncatingTail
-        let time = NSTextField(labelWithString: Self.headline(item) + (item.date.map { " · " + TaskWindow.timeText($0, hasTime: true) } ?? ""))
-        time.font = .systemFont(ofSize: 11); time.textColor = .secondaryLabelColor
-        let close = { [weak self] in self?.panel.orderOut(nil); if TaskAlertPanel.current === self { TaskAlertPanel.current = nil } }
-        let main = ClosureButton(item.isEvent ? "확인" : "완료") { if !item.isEvent { TaskStore.shared.complete(item) }; close() }
-        let later = ClosureButton("10분 뒤") { TaskAlerts.shared.snooze(item); close() }
-        let buttons = NSStackView(views: [main, later])
-        let stack = NSStackView(views: [title, time, buttons])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        stack.frame = effect.bounds; stack.autoresizingMask = [.width, .height]
-        title.widthAnchor.constraint(lessThanOrEqualToConstant: size.width - 24).isActive = true
-        effect.addSubview(stack)
-        panel.contentView = effect
+    /// '다시 알려 줘요' 칩(분)과 굴리는 고르기 값
+    static let chips = [5, 10, 30, 60]
+    static let wheelValues = [1, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120]
+    static func minutesText(_ m: Int) -> String { m >= 60 ? (m % 60 == 0 ? "\(m / 60)시간" : "\(m / 60)시간 \(m % 60)분") : "\(m)분" }
+
+    private init(_ n: TaskNotice, _ petFrame: CGRect, _ v: CGRect, expanded: Bool = false) {
+        notice = n
+        let t = Self.texts(n, now: Date())
+        let next: [TaskItem] = { if case .nudge(let l) = n { return Array(l.dropFirst().prefix(2)) }; return [] }()
+        let isEvent = n.eventID != nil
+        // 시작 시각에 온 일정 알림은 미룰 필요가 없다(버튼 하나)
+        let atStart: Bool = { if case .event(let i, _) = n, let d = i.date { return d.timeIntervalSinceNow < 60 }; return false }()
+        let w: CGFloat = 320
+        let base: CGFloat = atStart ? 140 : 214 + (isEvent ? 18 : 0)
+        let h: CGFloat = base + (expanded ? 190 : 0) + (next.isEmpty ? 0 : 30 + CGFloat(next.count) * 20)
+        let size = CGSize(width: w, height: h)
+        let shown = petFrame.intersection(v).isNull ? petFrame : petFrame.intersection(v)
+        var x = shown.midX > v.midX ? shown.minX - w - 8 : shown.maxX + 8
+        x = min(max(x, v.minX + 8), v.maxX - w - 8)
+        let y = min(max(shown.midY - h / 2, v.minY + 8), v.maxY - h - 8)
+        panel = FloatingPanel(size: size)
+        panel.setFrame(CGRect(x: x, y: y, width: w, height: h), display: false)
+        panel.appearance = NSAppearance(named: .darkAqua)
+        let root = NSView(frame: CGRect(origin: .zero, size: size))
+        let glass = makeGlass(cornerRadius: 20, frame: root.bounds)
+        glass.autoresizingMask = [.width, .height]
+        root.addSubview(glass)
+
+        func label(_ s: String, _ size: CGFloat, _ weight: NSFont.Weight, _ color: NSColor) -> NSTextField {
+            let f = NSTextField(labelWithString: s)
+            f.font = .systemFont(ofSize: size, weight: weight); f.textColor = color
+            f.lineBreakMode = .byTruncatingTail; f.maximumNumberOfLines = 1
+            return f
+        }
+        let item: TaskItem? = { switch n { case .event(let i, _), .todo(let i): return i; case .nudge: return nil } }()
+        let snooze: (Int) -> Void = { [weak self] m in
+            if let item { TaskAlerts.shared.snooze(item, minutes: m) } else { TaskAlerts.shared.nudgeLater() }
+            self?.close(next: true)
+        }
+        let main = PillButton(t.main, primary: true) { [weak self] in
+            guard let self else { return }
+            switch n {
+            case .todo(let i): TaskStore.shared.complete(i)
+            case .nudge(let l): if let f = l.first { TaskStore.shared.complete(f) }
+            case .event(let i, _): TaskAlerts.shared.mute(i)
+            }
+            self.close(next: true)
+        }
+        var views: [NSView] = [label(t.lead, 12, .semibold, .white.withAlphaComponent(0.6)), label(t.title, 22, .heavy, .white), label(t.sub, 12, .medium, .white.withAlphaComponent(0.6)), main]
+        if !atStart { views.append(label(item == nil ? "나중에 다시" : "다시 알려 줘요", 11, .bold, .white.withAlphaComponent(0.5))) }
+        let chipViews: [NSView] = Self.chips.map { m in PillButton(Self.minutesText(m), primary: false) { snooze(m) } } + [
+            PillButton(expanded ? "접기" : "직접 고르기", primary: false) { [weak self] in
+                guard let self else { return }
+                self.panel.orderOut(nil)
+                Self.current = TaskAlertPanel(n, petFrame, v, expanded: !expanded)
+            }]
+        let chipRow = NSStackView(views: chipViews); chipRow.spacing = 6; chipRow.distribution = .fillProportionally
+        if !atStart { views.append(chipRow) }
+        if expanded && !atStart {
+            let wheel = WheelPicker(values: Self.wheelValues.map(Self.minutesText), selected: 3)
+            let confirm = PillButton("\(Self.minutesText(Self.wheelValues[3])) 뒤 알림", primary: true) { snooze(Self.wheelValues[wheel.selected]) }
+            wheel.onChange = { [weak confirm] i in confirm?.setTitle("\(Self.minutesText(Self.wheelValues[i])) 뒤 알림") }
+            wheel.translatesAutoresizingMaskIntoConstraints = false
+            wheel.widthAnchor.constraint(equalToConstant: w - 40).isActive = true
+            wheel.heightAnchor.constraint(equalToConstant: 130).isActive = true
+            confirm.heightAnchor.constraint(equalToConstant: 34).isActive = true
+            confirm.widthAnchor.constraint(equalToConstant: w - 40).isActive = true
+            views += [wheel, confirm]
+        }
+        if isEvent && !atStart { views.append(label("알림을 끄지 않으면 시작할 때 한 번 더 알려 줘요", 10, .medium, .white.withAlphaComponent(0.45))) }
+        if !next.isEmpty {
+            let sep = NSBox(); sep.boxType = .separator
+            views.append(sep)
+            views.append(label("다음", 11, .semibold, .white.withAlphaComponent(0.5)))
+            views += next.map { label($0.title, 13, .medium, .white) }
+        }
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
+        stack.setCustomSpacing(14, after: views[2])
+        stack.setCustomSpacing(12, after: main)
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
+        stack.frame = root.bounds; stack.autoresizingMask = [.width, .height]
+        for v in views { v.widthAnchor.constraint(lessThanOrEqualToConstant: w - 40).isActive = true }
+        main.widthAnchor.constraint(equalToConstant: w - 40).isActive = true
+        main.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        chipRow.widthAnchor.constraint(equalToConstant: w - 40).isActive = true
+        chipViews.forEach { $0.heightAnchor.constraint(equalToConstant: 28).isActive = true }
+        root.addSubview(stack)
+        panel.contentView = root
         panel.orderFrontRegardless()
-        Ticker.once("할 일 알림 닫기", 60) { _ in close() }
+        // 고르는 중(펼침)에는 저절로 닫지 않는다
+        if !expanded { Ticker.once("할 일 알림 닫기", 60) { [weak self] _ in self?.close(next: true) } }
+    }
+
+    private func close(next: Bool) {
+        panel.orderOut(nil)
+        guard Self.current === self else { return }
+        Self.current = nil
+        if next, !Self.queue.isEmpty {
+            let (n, f, v) = Self.queue.removeFirst()
+            Self.current = TaskAlertPanel(n, f, v)
+        }
+    }
+}
+
+/// F27 둥근 버튼(파랑 = 주 동작, 유리 = 보조). 포커스를 받지 않는다.
+final class PillButton: NSButton {
+    private let handler: () -> Void
+    init(_ title: String, primary: Bool, _ handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(frame: .zero)
+        isBordered = false; wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.backgroundColor = (primary ? NSColor.systemBlue : NSColor.white.withAlphaComponent(0.12)).cgColor
+        attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 13, weight: .semibold)])
+        refusesFirstResponder = true
+        target = self; action = #selector(run)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    @objc private func run() { handler() }
+    func setTitle(_ t: String) { attributedTitle = NSAttributedString(string: t, attributes: [.foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 13, weight: .semibold)]) }
+}
+
+/// F28 굴리는 고르기(아이폰 휠처럼): 스크롤·끌기·누르기로 고르고, 가운데 줄이 고른 값
+final class WheelPicker: NSView {
+    let values: [String]
+    private(set) var selected: Int { didSet { if selected != oldValue { needsDisplay = true; onChange(selected) } } }
+    var onChange: (Int) -> Void = { _ in }
+    private var acc: CGFloat = 0, dragY: CGFloat?
+    private let rowH: CGFloat = 26
+    init(values: [String], selected: Int) { self.values = values; self.selected = selected; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func scrollWheel(with e: NSEvent) {
+        acc += e.scrollingDeltaY * (e.hasPreciseScrollingDeltas ? 1 : 10)
+        while abs(acc) >= rowH { step(acc > 0 ? -1 : 1); acc -= acc > 0 ? rowH : -rowH }
+    }
+    override func mouseDown(with e: NSEvent) { dragY = convert(e.locationInWindow, from: nil).y }
+    override func mouseDragged(with e: NSEvent) {
+        let y = convert(e.locationInWindow, from: nil).y
+        guard let d = dragY, abs(y - d) >= rowH else { return }
+        step(y > d ? 1 : -1); dragY = y
+    }
+    override func mouseUp(with e: NSEvent) {
+        defer { dragY = nil }
+        let y = convert(e.locationInWindow, from: nil).y
+        guard let d = dragY, abs(y - d) < 3 else { return }
+        step(Int(((bounds.midY - y) / rowH).rounded()))   // 누른 줄로
+    }
+    private func step(_ k: Int) { selected = min(max(selected + k, 0), values.count - 1) }
+    override func draw(_ dirtyRect: NSRect) {
+        let band = CGRect(x: 0, y: bounds.midY - rowH / 2, width: bounds.width, height: rowH)
+        NSColor.white.withAlphaComponent(0.12).setFill()
+        NSBezierPath(roundedRect: band, xRadius: 9, yRadius: 9).fill()
+        let para = NSMutableParagraphStyle(); para.alignment = .center
+        for k in -2...2 {
+            let i = selected + k
+            guard values.indices.contains(i) else { continue }
+            let on = k == 0
+            let s = NSAttributedString(string: values[i], attributes: [.font: NSFont.systemFont(ofSize: on ? 17 : 13, weight: on ? .heavy : .medium),
+                                                                       .foregroundColor: NSColor.white.withAlphaComponent(on ? 1 : 0.35 - 0.1 * CGFloat(abs(k) - 1)), .paragraphStyle: para])
+            let hgt = s.size().height
+            s.draw(in: CGRect(x: 0, y: bounds.midY - CGFloat(k) * rowH - hgt / 2, width: bounds.width, height: hgt))
+        }
     }
 }
 
@@ -444,6 +708,8 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
     private let input = NSTextField()
     private let chips = NSStackView()
     private let list = NSStackView()
+    /// F27 6번 A: 오른쪽 '다가오는' 칸
+    private let list2 = NSStackView()
     private var monitors: [Any] = []
     private var previousApp: NSRunningApplication?
     /// 지금 입력의 날짜(칩으로 고치면 `manual`)
@@ -451,13 +717,13 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
     private var manual: (date: Date?, hasTime: Bool)?
     private var asEvent = true
     private var popover: NSPopover?
-    private static let width: CGFloat = 420, height: CGFloat = 500
+    private static let width: CGFloat = 620, height: CGFloat = 500
+    private static let column: CGFloat = (width - 30) / 2
     /// F26 H: 큰 제목·진행 막대·탭·아래 입력
     private let heading = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
     private let progressText = NSTextField(labelWithString: "")
-    private let tabs = NSSegmentedControl(labels: ["오늘", "다가오는", "날짜 없음", "전체"], trackingMode: .selectOne, target: nil, action: nil)
-    private var tab = 0
+    private let colTitles = (NSTextField(labelWithString: "오늘"), NSTextField(labelWithString: "다가오는"))
 
     static func timeText(_ d: Date, hasTime: Bool) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "ko_KR")
@@ -495,11 +761,17 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         progressText.frame = CGRect(x: w - 90, y: h - 68, width: 74, height: 16)
         progressText.font = .systemFont(ofSize: 11); progressText.textColor = .secondaryLabelColor; progressText.alignment = .right
         effect.addSubview(progressText)
-        tabs.frame = CGRect(x: 14, y: h - 100, width: w - 28, height: 24)
-        tabs.segmentDistribution = .fillEqually
-        tabs.target = self; tabs.action = #selector(tabChanged(_:))
-        tabs.selectedSegment = tab
-        effect.addSubview(tabs)
+        // F27 6번 C: '고정'을 누르면 항상 위 미니 창으로
+        let pin = ClosureButton("") { [weak self] in self?.close(restore: true); TaskMini.shared.show() }
+        pin.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "고정")
+        pin.bezelStyle = .inline; pin.toolTip = "항상 위 작은 창으로 고정"
+        pin.frame = CGRect(x: w - 44, y: h - 42, width: 28, height: 22)
+        effect.addSubview(pin)
+        for (i, t) in [colTitles.0, colTitles.1].enumerated() {
+            t.font = .boldSystemFont(ofSize: 13); t.textColor = .secondaryLabelColor
+            t.frame = CGRect(x: 14 + CGFloat(i) * (Self.column + 4), y: h - 98, width: Self.column, height: 18)
+            effect.addSubview(t)
+        }
 
         input.frame = CGRect(x: 12, y: 10, width: w - 24, height: 30)
         input.placeholderString = "예: 내일 3시 치과 · ↩ 추가 · Esc 닫기"
@@ -513,14 +785,18 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         chips.orientation = .horizontal; chips.spacing = 6
         effect.addSubview(chips)
 
-        let scroll = NSScrollView(frame: CGRect(x: 6, y: 76, width: w - 12, height: h - 184))
-        scroll.drawsBackground = false; scroll.hasVerticalScroller = true
-        list.orientation = .vertical; list.alignment = .leading; list.spacing = 2
-        list.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
-        let doc = FlippedView(frame: CGRect(x: 0, y: 0, width: w - 30, height: 10))
-        doc.addSubview(list)
-        scroll.documentView = doc
-        effect.addSubview(scroll)
+        for (i, l) in [list, list2].enumerated() {
+            let scroll = NSScrollView(frame: CGRect(x: 6 + CGFloat(i) * (Self.column + 4), y: 76, width: Self.column + 8, height: h - 184))
+            scroll.drawsBackground = false; scroll.hasVerticalScroller = true
+            scroll.wantsLayer = true; scroll.layer?.cornerRadius = 12
+            scroll.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.04).cgColor
+            l.orientation = .vertical; l.alignment = .leading; l.spacing = 2
+            l.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+            let doc = FlippedView(frame: CGRect(x: 0, y: 0, width: Self.column - 8, height: 10))
+            doc.addSubview(l)
+            scroll.documentView = doc
+            effect.addSubview(scroll)
+        }
         p.contentView = effect
         panel = p
         parsed = .init(title: "", date: nil, hasTime: false); manual = nil; dateRemoved = false
@@ -605,7 +881,6 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func kindChanged(_ s: NSSegmentedControl) { asEvent = s.selectedSegment == 0 }
-    @objc private func tabChanged(_ s: NSSegmentedControl) { tab = s.selectedSegment; reload() }
 
     private func editDate(from chip: NSView) {
         let c = current
@@ -639,8 +914,8 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
 
     // 목록
     private func reload() {
-        guard let doc = list.superview else { return }
-        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        guard list.superview != nil else { return }
+        [list, list2].forEach { $0.arrangedSubviews.forEach { $0.removeFromSuperview() } }
         let store = TaskStore.shared
         if !store.canAddReminder && !store.canAddEvent {
             list.addArrangedSubview(note(TaskStore.anyOn ? "권한이 필요해요. 설정 '할 일·일정'에서 권한을 열어 주세요." : "설정 '할 일·일정'에서 켜 주세요."))
@@ -650,23 +925,32 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         heading.stringValue = left == 0 ? "오늘 할 일을 다 했어요" : "할 일 \(left)개 남았어요"
         let p = TaskLogic.progress(done: store.doneToday, left: g.today.filter { !$0.isEvent }.count)
         progress.doubleValue = p.fraction; progressText.stringValue = p.text
-        let groups = [("오늘", g.today), ("다가오는 일", g.upcoming), ("날짜 없음", g.undated)]
-        let shown = tab == 3 ? groups : [groups[tab]]
-        if shown.allSatisfy({ $0.1.isEmpty }) { list.addArrangedSubview(note("비어 있어요. 아래에 적고 ↩를 누르면 추가돼요.")) }
-        for (name, items) in shown where !items.isEmpty {
-            let h = NSTextField(labelWithString: name)
-            h.font = .boldSystemFont(ofSize: 12); h.textColor = .secondaryLabelColor
-            list.addArrangedSubview(h)
-            items.forEach { list.addArrangedSubview(row($0)) }
+        // 왼쪽: 오늘 + 날짜 없음, 오른쪽: 다가오는 일
+        colTitles.0.stringValue = "오늘 \(g.today.count + g.undated.count)"
+        colTitles.1.stringValue = "다가오는 \(g.upcoming.count)"
+        func fill(_ l: NSStackView, _ groups: [(String?, [TaskItem])], empty: String) {
+            if groups.allSatisfy({ $0.1.isEmpty }) { l.addArrangedSubview(note(empty)) }
+            for (name, items) in groups where !items.isEmpty {
+                if let name {
+                    let h = NSTextField(labelWithString: name)
+                    h.font = .boldSystemFont(ofSize: 11); h.textColor = .tertiaryLabelColor
+                    l.addArrangedSubview(h)
+                }
+                items.forEach { l.addArrangedSubview(row($0)) }
+            }
+            guard let doc = l.superview else { return }
+            let size = l.fittingSize, width = Self.column - 8
+            doc.frame.size = CGSize(width: width, height: max(size.height, 10))
+            l.frame = CGRect(x: 0, y: 0, width: width, height: size.height)
         }
-        let size = list.fittingSize
-        let width = Self.width - 30
-        doc.frame.size = CGSize(width: width, height: max(size.height, 10))
-        list.frame = CGRect(x: 0, y: 0, width: width, height: size.height)
+        fill(list, [(nil, g.today), ("날짜 없음", g.undated)], empty: "비어 있어요. 아래에 적고 ↩를 누르면 추가돼요.")
+        fill(list2, [(nil, g.upcoming)], empty: "다가오는 일이 없어요.")
     }
 
     /// 두 번 눌러 고치기: 이름 + 날짜(시간 켜기·끄기, 날짜 빼기)
-    private func edit(_ item: TaskItem, from row: NSView) {
+    var isEditing: Bool { popover?.isShown == true }
+
+    func edit(_ item: TaskItem, from row: NSView) {
         popover?.close()
         let name = NSTextField(string: item.title)
         name.widthAnchor.constraint(equalToConstant: 240).isActive = true
@@ -737,7 +1021,7 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
             : { let b = ClosureButton("") { TaskStore.shared.complete(item) }; b.setButtonType(.switch); return b }()
         let title = NSTextField(labelWithString: item.title)
         title.lineBreakMode = .byTruncatingTail
-        title.widthAnchor.constraint(lessThanOrEqualToConstant: 250).isActive = true
+        title.widthAnchor.constraint(lessThanOrEqualToConstant: Self.column - 130).isActive = true
         let time = NSTextField(labelWithString: item.date.map { Self.timeText($0, hasTime: item.hasTime) } ?? "")
         time.font = .systemFont(ofSize: 11); time.textColor = overdue ? .systemRed : .secondaryLabelColor
         let r = MenuRow(views: [lead, title, time])
@@ -794,5 +1078,72 @@ final class DoneToast {
         p.orderFrontRegardless()
         panel = p; current = p
         Ticker.once("완료 토스트 닫기", 4) { _ in if current === p { p.orderOut(nil); current = nil } }
+    }
+}
+
+/// F27 6번 C: 항상 위 작은 할 일 창(포커스를 뺏지 않음). 끌어서 옮기고, 자리는 기억한다. 고정 풀기를 누르면 큰 창으로.
+final class TaskMini: NSObject {
+    static let shared = TaskMini()
+    private var panel: FloatingPanel?
+    private let stack = NSStackView()
+    var isOpen: Bool { panel != nil }
+
+    func show() {
+        guard panel == nil else { return }
+        let w: CGFloat = 260
+        let p = FloatingPanel(size: CGSize(width: w, height: 120))
+        p.appearance = NSAppearance(named: .darkAqua)
+        p.isMovable = true; p.isMovableByWindowBackground = true
+        let v = NSScreen.main?.visibleFrame ?? .zero
+        let saved = UserDefaults.standard.string(forKey: "taskMiniOrigin").map(NSPointFromString)
+        p.setFrameOrigin(saved ?? CGPoint(x: v.maxX - w - 16, y: v.maxY - 200))
+        let root = NSView(frame: p.frame)
+        let glass = makeGlass(cornerRadius: 16, frame: root.bounds)
+        glass.autoresizingMask = [.width, .height]
+        root.addSubview(glass)
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        stack.frame = root.bounds; stack.autoresizingMask = [.width, .height]
+        root.addSubview(stack)
+        p.contentView = root
+        p.orderFrontRegardless()
+        panel = p
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: TaskStore.changedNote, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSWindow.didMoveNotification, object: p)
+        refresh()
+    }
+
+    func close() {
+        NotificationCenter.default.removeObserver(self)
+        panel?.orderOut(nil); panel = nil
+    }
+
+    @objc private func moved() { if let p = panel { UserDefaults.standard.set(NSStringFromPoint(p.frame.origin), forKey: "taskMiniOrigin") } }
+
+    @objc private func refresh() {
+        guard let p = panel else { return }
+        let pending = TaskLogic.pending(TaskStore.shared.items, now: Date())
+        let title = NSTextField(labelWithString: pending.isEmpty ? "오늘 할 일을 다 했어요" : "오늘 할 일 \(pending.count)")
+        title.font = .boldSystemFont(ofSize: 14); title.textColor = .white
+        let unpin = ClosureButton("") { [weak self] in self?.close(); TaskWindow.shared.open() }
+        unpin.image = NSImage(systemSymbolName: "pin.slash", accessibilityDescription: "고정 풀기")
+        unpin.bezelStyle = .inline; unpin.toolTip = "고정 풀기(큰 창으로)"
+        let head = NSStackView(views: [title, NSView(), unpin])
+        head.translatesAutoresizingMaskIntoConstraints = false
+        head.widthAnchor.constraint(equalToConstant: p.frame.width - 28).isActive = true
+        var views: [NSView] = [head]
+        for item in pending.prefix(8) {
+            let b = ClosureButton(item.title) { TaskStore.shared.complete(item) }
+            b.setButtonType(.switch); b.font = .systemFont(ofSize: 13)
+            b.lineBreakMode = .byTruncatingTail
+            b.widthAnchor.constraint(lessThanOrEqualToConstant: p.frame.width - 28).isActive = true
+            views.append(b)
+        }
+        if pending.count > 8 { let more = NSTextField(labelWithString: "외 \(pending.count - 8)개"); more.font = .systemFont(ofSize: 11); more.textColor = .secondaryLabelColor; views.append(more) }
+        stack.setViews(views, in: .leading)
+        let h = stack.fittingSize.height
+        var f = p.frame
+        f.origin.y += f.height - h; f.size.height = h
+        p.setFrame(f, display: true)
     }
 }

@@ -57,9 +57,9 @@ enum Geometry {
     static func islandSize(dock: Dock, expanded: Bool, chips: CGFloat = 0) -> CGSize {
         switch (dock == .bottom || dock == .top, expanded) {
         case (true, false): CGSize(width: max(96, 40 + chips + 12), height: 30)   // F26: 칩만큼 길어진다
-        case (true, true): CGSize(width: 240, height: 64)
+        case (true, true): CGSize(width: 280, height: 120)    // F27: 아래로 펼치는 '미니 오늘'
         case (false, false): CGSize(width: 30, height: 96)
-        case (false, true): CGSize(width: 210, height: 112)
+        case (false, true): CGSize(width: 250, height: 150)   // F27: 옆으로 서랍처럼
         }
     }
 
@@ -159,6 +159,28 @@ enum Geometry {
             ring += 1
         }
         return result
+    }
+
+    /// F27 반원 칸: `base` 방향(도, 90 = 위)을 가운데로 200° 펼친다
+    static func halfRing(count: Int, center c: CGPoint, radius: Double, base: Double) -> [CGPoint] {
+        (0..<count).map { i in
+            let deg = count == 1 ? base : base + 100 - 200 * Double(i) / Double(count - 1)
+            let a = deg * .pi / 180
+            return CGPoint(x: c.x + radius * cos(a), y: c.y + radius * sin(a))
+        }
+    }
+
+    /// F27: 반원을 펼 방향. 화면 안에 들어가고 다른 패널과 겹치지 않는 첫 방향(위·아래·오른쪽·왼쪽 순, 위가 좁으면 아래 먼저).
+    /// 모두 겹치면 화면 안에 드는 첫 방향
+    static func ringDirection(center c: CGPoint, radius: Double, in v: CGRect, occupied: [CGRect], preferUp: Bool) -> Double {
+        let order: [Double] = preferUp ? [90, 270, 0, 180] : [270, 90, 0, 180]
+        func area(_ base: Double) -> CGRect {
+            let pts = halfRing(count: 7, center: c, radius: radius, base: base)
+            let xs = pts.map(\.x), ys = pts.map(\.y), r: CGFloat = 30
+            return CGRect(x: xs.min()! - r, y: ys.min()! - r, width: xs.max()! - xs.min()! + r * 2, height: ys.max()! - ys.min()! + r * 2)
+        }
+        let fits = order.filter { v.contains(area($0)) }
+        return fits.first { b in !occupied.contains { $0.intersects(area(b)) } } ?? fits.first ?? order[0]
     }
 
     /// 펫 창에서 화면에 보이는 부분의 가운데. 링의 중심으로 쓴다.
@@ -390,16 +412,16 @@ enum SelfTest {
         check(run(.rightCommand, [(rcmdDown, 0), (.down(code: 8, isRepeat: false), 0.05), (.up(code: 8), 0.08), (rcmdUp, 0.1)]).isEmpty, "⌘C → 전환 없음")
         check(run(.rightCommand, [(.flags(code: 55, flags: UInt64(0x100000 | 0x8)), 0), (.flags(code: 55, flags: 0), 0.1)]).isEmpty, "왼쪽 ⌘ 무시")
         check(run(.rightOption, [(.flags(code: 61, flags: UInt64(0x80000 | 0x40)), 0), (.flags(code: 61, flags: 0), 0.1)]) == [.toggleInput], "오른쪽 ⌥ 혼자 → 전환")
-        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.up(code: 79), 0.49)]) == [.toggleInput], "Caps 짧게 → 전환")
-        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.up(code: 79), 0.5)]) == [.toggleCapsLock], "Caps 0.5초 → 대문자 고정")
+        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.up(code: 79), 0.49)]) == [.toggleInput], "Caps 짧게 → 누르는 순간 전환")
+        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.up(code: 79), 0.5)]) == [.toggleInput, .capsInstead], "Caps 0.5초 → 전환 되돌리고 대문자 고정")
         check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.down(code: 79, isRepeat: true), 0.3),
-                              (.down(code: 79, isRepeat: true), 0.55), (.down(code: 79, isRepeat: true), 0.6), (.up(code: 79), 0.9)]) == [.toggleCapsLock],
+                              (.down(code: 79, isRepeat: true), 0.55), (.down(code: 79, isRepeat: true), 0.6), (.up(code: 79), 0.9)]) == [.toggleInput, .capsInstead],
               "Caps 누르고 있으면 0.5초에 한 번만 대문자 고정")
-        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.down(code: 0, isRepeat: false), 0.1), (.up(code: 79), 0.2)]).isEmpty, "Caps+다른 키 → 전환 없음")
-        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.down(code: 79, isRepeat: false), 5), (.up(code: 79), 5.1)]) == [.toggleInput], "떼기를 놓쳐도 다음 짧은 누름은 전환")
+        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.down(code: 0, isRepeat: false), 0.05), (.up(code: 79), 0.08)]) == [.toggleInput], "빠르게 치다 Caps와 다음 글자가 겹쳐도 전환(씹힘 없음)")
+        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.up(code: 79), 0.05), (.down(code: 79, isRepeat: false), 0.1), (.up(code: 79), 0.15)]) == [.toggleInput, .toggleInput], "연타 두 번 → 두 번 전환")
         var jt = SwitchJudge(key: .capsLock)
         _ = jt.feed(.down(code: 79, isRepeat: false), at: t0)
-        check(jt.tick(at: t0.addingTimeInterval(0.5)) == .toggleCapsLock && jt.feed(.up(code: 79), at: t0.addingTimeInterval(0.7)) == nil, "반복 없이도 0.5초에 대문자 고정, 떼면 그만")
+        check(jt.tick(at: t0.addingTimeInterval(0.5)) == .capsInstead && jt.feed(.up(code: 79), at: t0.addingTimeInterval(0.7)) == nil, "반복 없이도 0.5초에 대문자 고정, 떼면 그만")
         check(run(.rightCommand, [(.flags(code: 55, flags: UInt64(0x100000 | 0x8)), 0), (.flags(code: 54, flags: UInt64(0x100000 | 0x8 | 0x10)), 0.1),
                                   (.flags(code: 54, flags: UInt64(0x100000 | 0x8)), 0.2)]).isEmpty, "왼쪽 ⌘을 누른 채 오른쪽 ⌘ → 전환 없음")
         check(run(.rightCommand, [(rcmdDown, 0), (.down(code: -1, isRepeat: false), 0.1), (rcmdUp, 0.2)]).isEmpty, "⌘-클릭 → 전환 없음")
@@ -408,6 +430,9 @@ enum SelfTest {
         let other: KeyMapping.Entry = ["HIDKeyboardModifierMappingSrc": 1, "HIDKeyboardModifierMappingDst": 2]
         check(KeyMapping.adding([]) == [KeyMapping.ours] && KeyMapping.adding(KeyMapping.adding([other])) == [other, KeyMapping.ours], "매핑 더하기(한 번만, 다른 항목 보존)")
         check(KeyMapping.removing([other, KeyMapping.ours]) == [other], "매핑 빼기(다른 항목 보존)")
+        let multi = "RegistryID  Key   Value\n10000cba5   UserKeyMapping   (\n)\n10000cc5c   UserKeyMapping   (\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)\n"
+        check(KeyMapping.parse(KeyMapping.firstBlock(multi)) == [], "키보드별 출력: 첫 장치 목록만(빈 목록)")
+        check(KeyMapping.parse(KeyMapping.firstBlock("x   UserKeyMapping   (\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)\ny   UserKeyMapping   (\n)")) == [KeyMapping.ours], "키보드별 출력: 첫 장치 항목 읽기")
         check(KeyMapping.parse("(null)") == [] && KeyMapping.parse("{ weird }") == nil
               && KeyMapping.parse("(\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)") == [KeyMapping.ours],
               "hidutil 출력 읽기")
@@ -450,15 +475,15 @@ enum SelfTest {
             let v = CGRect(x: 0, y: 0, width: 1440, height: 900), c = CGPoint(x: 30, y: 450)
             check(Geometry.islandFrame(dock: .left, expanded: false, center: c, in: v) == CGRect(x: 4, y: 402, width: 30, height: 96), "아일랜드 왼쪽 접힘")
             let t = Geometry.islandFrame(dock: .top, expanded: true, center: CGPoint(x: 720, y: 890), in: v)
-            check(t.maxY == 896 && t.width == 240, "아일랜드 위 가로, 펼쳐도 위 끝")
+            check(t.maxY == 896 && t.width == 280, "아일랜드 위 가로, 펼쳐도 위 끝(아래로 미니 오늘)")
             check(Geometry.dock(for: CGRect(x: 600, y: 820, width: 120, height: 84), in: v) == .top, "위 가장자리 붙기")
             check(Geometry.dock(for: CGRect(x: 2, y: 820, width: 120, height: 84), in: v) == .left, "왼쪽 위 구석은 왼쪽")
             let e = Geometry.islandFrame(dock: .left, expanded: true, center: c, in: v)
-            check(e.minX == 4 && e.size == CGSize(width: 210, height: 112), "아일랜드 왼쪽 펼침은 같은 끝")
+            check(e.minX == 4 && e.size == CGSize(width: 250, height: 150), "아일랜드 왼쪽 펼침은 같은 끝(옆으로 서랍처럼)")
             let r = Geometry.islandFrame(dock: .right, expanded: true, center: CGPoint(x: 1400, y: 450), in: v)
             check(r.maxX == 1436, "아일랜드 오른쪽 펼침은 오른쪽 끝")
             let b = Geometry.islandFrame(dock: .bottom, expanded: true, center: CGPoint(x: 720, y: 10), in: v)
-            check(b.minY == 4 && b.midX == 720 && b.size == CGSize(width: 240, height: 64), "아일랜드 아래 가로")
+            check(b.minY == 4 && b.midX == 720 && b.size == CGSize(width: 280, height: 120), "아일랜드 아래 가로")
             let bl = Geometry.islandFrame(dock: .bottomLeft, expanded: false, center: .zero, in: v)
             check(bl.minX == 4 && bl.minY == 40 && bl.height == 96, "구석은 옆 세로 알약, 아래 40pt")
             let top = Geometry.islandFrame(dock: .right, expanded: true, center: CGPoint(x: 1400, y: 899), in: v)
@@ -696,7 +721,104 @@ enum SelfTest {
         // F26 할 일 창 진행·완료 문구
         check(TaskLogic.progress(done: 2, left: 2) == (0.5, "오늘 2/4") && TaskLogic.progress(done: 0, left: 0).fraction == 0, "할 일 진행 막대")
         check(DoneToast.text("치과") == "‘치과’ 끝냈어요", "완료 토스트 문구")
-        check(DoneAlert.summary(["A"]) == "A 작업이 끝났어요" && DoneAlert.summary(["A", "B", "A"]) == "그 사이 3개 끝났어요 · A, B", "끝남 모아 알리기 문구")
+        // F27 일정·할 일 알림 시각
+        do {
+            let start = Date(timeIntervalSince1970: 1_800_000_000)
+            let ev = TaskItem(id: "e", title: "치과", date: start, hasTime: true, isEvent: true)
+            func at(_ min: Double) -> Date { start.addingTimeInterval(min * 60) }
+            check(TaskLogic.eventAlerts([ev], now: at(-61), sent: []).isEmpty, "일정 알림: 1시간 전보다 이르면 없음")
+            let h = TaskLogic.eventAlerts([ev], now: at(-60), sent: [])
+            check(h.map(\.minutes) == [60], "일정 알림: 1시간 전")
+            let sent = Set(h.flatMap(\.keys))
+            check(TaskLogic.eventAlerts([ev], now: at(-45), sent: sent).isEmpty, "일정 알림: 같은 단계는 한 번")
+            check(TaskLogic.eventAlerts([ev], now: at(-30), sent: sent).isEmpty, "일정 알림: 30분 전 알림은 없음(사용자가 직접 미룸)")
+            check(TaskLogic.eventAlerts([ev], now: at(0.5), sent: sent).map(\.minutes) == [0], "일정 알림: 정각")
+            let late = TaskLogic.eventAlerts([ev], now: at(0.5), sent: [])
+            check(late.map(\.minutes) == [0] && late[0].keys.count == 2, "일정 알림: 늦게 켜지면 가장 최근 단계 하나만, 앞 단계도 보낸 것으로")
+            check(TaskAlerts.pruned(["e@\(Int(start.timeIntervalSince1970))#60", "old@1000#0", "x"], now: start) == ["e@\(Int(start.timeIntervalSince1970))#60", "x"], "알림 기록: 이틀 지난 것만 버림")
+            check(TaskAlertPanel.minutesText(90) == "1시간 30분" && TaskAlertPanel.minutesText(60) == "1시간" && TaskAlertPanel.minutesText(5) == "5분", "미루기 시간 글")
+            check(TaskLogic.eventAlerts([ev], now: at(3), sent: []).isEmpty, "일정 알림: 시작 2분 뒤부터는 없음")
+            var todo = ev; todo.isEvent = false
+            check(TaskLogic.eventAlerts([todo], now: at(0), sent: []).isEmpty, "일정 알림: 할 일은 제외")
+            check(TaskLogic.eventLead(start: start, now: at(-60)) == "1시간 뒤 일정" && TaskLogic.eventLead(start: start, now: at(-30)) == "30분 뒤 일정"
+                  && TaskLogic.eventLead(start: start, now: at(-90)) == "1시간 30분 뒤 일정" && TaskLogic.eventLead(start: start, now: at(0)) == "지금 시작해요", "일정 알림 윗줄 문구")
+            check(TaskLogic.nudgeDue(remaining: 2, last: at(-60), now: at(0), minutes: 60) && !TaskLogic.nudgeDue(remaining: 2, last: at(-59), now: at(0), minutes: 60), "할 일 알림: N분마다")
+            check(!TaskLogic.nudgeDue(remaining: 0, last: at(-600), now: at(0), minutes: 60) && !TaskLogic.nudgeDue(remaining: 3, last: at(-600), now: at(0), minutes: 0), "할 일 알림: 남은 게 없거나 끄면 없음")
+            let d = UserDefaults.standard
+            let saved = (d.object(forKey: "eventDays"), d.object(forKey: "nudgeMinutes"))
+            d.removeObject(forKey: "eventDays"); d.removeObject(forKey: "nudgeMinutes")
+            check(TaskStore.eventDays == 7 && TaskStore.nudgeMinutes == 60, "설정 기본값: 일정 7일 · 할 일 60분")
+            d.set(saved.0, forKey: "eventDays"); d.set(saved.1, forKey: "nudgeMinutes")
+            let far = TaskItem(id: "f", title: "여행", date: start.addingTimeInterval(86400 * 8), hasTime: true, isEvent: true)
+            check(TaskLogic.upcomingEvents([ev, far], now: at(-30), days: 7).map(\.id) == ["e"] && TaskLogic.upcomingEvents([ev], now: at(10), days: 7).isEmpty, "오늘 카드 일정: 기간 안·지난 것 제외")
+            check(TaskAlertPanel.texts(.nudge([ev, ev]), now: at(-5)).lead == "남은 할 일 2개", "알림 패널: 남은 할 일 문구")
+        }
+        // F27 원형 메뉴 방향
+        do {
+            let v = CGRect(x: 0, y: 0, width: 1440, height: 900), c = CGPoint(x: 720, y: 450)
+            check(Geometry.ringDirection(center: c, radius: 96, in: v, occupied: [], preferUp: true) == 90, "원형 메뉴: 기본은 위")
+            check(Geometry.ringDirection(center: c, radius: 96, in: v, occupied: [CGRect(x: 600, y: 520, width: 300, height: 200)], preferUp: true) == 270, "원형 메뉴: 위에 패널이 있으면 아래")
+            check(Geometry.ringDirection(center: c, radius: 96, in: v, occupied: [CGRect(x: 500, y: 520, width: 160, height: 200), CGRect(x: 500, y: 180, width: 160, height: 200)], preferUp: true) == 0, "원형 메뉴: 위아래가 막히면 옆")
+            check(Geometry.ringDirection(center: CGPoint(x: 720, y: 880), radius: 96, in: v, occupied: [], preferUp: false) == 270, "원형 메뉴: 화면 위 끝이면 아래")
+            let h = Geometry.halfRing(count: 6, center: c, radius: 100, base: 90)
+            check(h.count == 6 && h.allSatisfy { $0.y >= c.y - 20 }, "원형 메뉴: 반원 6칸")
+            check(ClockMode.allCases.map(\.title) == ["항상", "갖다대면", "안 봄"], "받침대 보기 3가지")
+        }
+        // F27 변환 칸
+        do {
+            func ops(_ names: [String]) -> [ConvertOp] { ConvertOp.options(for: names.map { URL(fileURLWithPath: "/tmp/" + $0) }) }
+            check(!ops(["a.png"]).contains(.toPNG) && ops(["a.png"]).contains(.toJPEG) && ops(["a.png"]).contains(.imagesToPDF), "변환: PNG는 PNG 칸 없음, 1장도 PDF")
+            check(!ops(["a.jpg"]).contains(.toJPEG) && !ops(["a.tif"]).contains(.toTIFF), "변환: jpg·tif도 같은 형식으로 봄")
+            check(ops(["a.pdf"]).contains(.pdfToDOCX) && ops(["a.pdf"]).contains(.pdfSplit) && !ops(["a.pdf"]).contains(.pdfMerge) && ops(["a.pdf", "b.pdf"]).contains(.pdfMerge), "변환: PDF 칸, 여럿이면 합치기")
+            check(ops(["a.csv"]) == [.csvToXLSX, .sheetToPDF, .zip] && ops(["a.xlsx"]) == [.sheetToCSV, .sheetToPDF, .zip], "변환: 표 칸")
+            check(!ops(["a.mov"]).contains(.toMOV) && ops(["a.mov"]).contains(.posterFrame) && !ops(["a.m4a"]).contains(.toM4A) && ops(["a.m4a"]).contains(.toAIFF), "변환: 영상·오디오 같은 형식 빼기")
+            check(!ops(["a.docx"]).contains(.docToDOCX) && ops(["a.docx"]).contains(.docToODT), "변환: 문서 ODT")
+            check(ConvertOp.pdfToDOCX.note == "글자만" && ConvertOp.sheetToPDF.note == "단순 표", "변환: 품질 제한 칸 설명")
+            check(XLSX.parseCSV("\u{FEFF}a,\"b,c\"\r\n\"x\"\"y\",2\n") == [["a", "b,c"], ["x\"y", "2"]], "CSV 읽기: 따옴표·쉼표·BOM")
+            let xml = XLSX.sheetXML([["이름", "3", "007"]])
+            check(xml.contains("<c r=\"B1\"><v>3</v></c>") && xml.contains("<t xml:space=\"preserve\">007</t>") && xml.contains("이름"), "엑셀 쓰기: 숫자·앞 0 글자")
+        }
+        // F27 원형 변환 배치·맞추기
+        do {
+            let one = WheelMath.layout(formats: 4, actions: 2, start: 90, span: 360)
+            check(one.count == 6 && Set(one.map(\.r1)) == [WheelMath.single.r1], "변환 원: 7개 이하 고리 하나")
+            let two = WheelMath.layout(formats: 5, actions: 7, start: 90, span: 360)
+            check(two.prefix(5).allSatisfy { $0.r1 == WheelMath.inner.r1 } && two.suffix(7).allSatisfy { $0.r1 == WheelMath.outer.r1 }, "변환 원: 넘으면 두 고리(안 형식·밖 동작)")
+            check(WheelMath.slot(CGPoint(x: 5, y: 100), one) == 0 && WheelMath.slot(CGPoint(x: -5, y: 100), one) == 5, "변환 원: 위 칸 맞추기(시계 방향)")
+            check(WheelMath.slot(CGPoint(x: 10, y: 10), one) == nil && WheelMath.slot(CGPoint(x: 0, y: 300), one) == nil, "변환 원: 가운데·바깥은 칸 아님")
+            check(WheelMath.slot(CGPoint(x: 5, y: 80), two) == 0 && WheelMath.slot(CGPoint(x: 5, y: 150), two) == 5, "변환 원: 안·밖 고리 구분")
+            let v = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            check(WheelMath.arc(center: CGPoint(x: 720, y: 450), in: v, reach: 194) == (90, 360) && WheelMath.arc(center: CGPoint(x: 720, y: 60), in: v, reach: 194) == (180, 180), "변환 원: 화면 아래 끝이면 위 반원")
+            let half = WheelMath.layout(formats: 3, actions: 0, start: 180, span: 180)
+            check(WheelMath.slot(CGPoint(x: -100, y: 10), half) == 0 && WheelMath.slot(CGPoint(x: 100, y: 10), half) == 2 && WheelMath.slot(CGPoint(x: 0, y: -100), half) == nil, "변환 원: 반원 맞추기")
+        }
+        // F27 서랍 최근 파일
+        do {
+            let fm = FileManager.default
+            let root = fm.temporaryDirectory.appendingPathComponent("tasky-recent-\(UUID().uuidString)/프로젝트")
+            try? fm.createDirectory(at: root.appendingPathComponent("a/b/c/d"), withIntermediateDirectories: true)
+            let now = Date()
+            func make(_ path: String, ago days: Double) {
+                let u = root.appendingPathComponent(path)
+                fm.createFile(atPath: u.path, contents: Data("x".utf8))
+                try? fm.setAttributes([.modificationDate: now.addingTimeInterval(-days * 86400)], ofItemAtPath: u.path)
+            }
+            make("new.txt", ago: 0.1); make("a/mid.txt", ago: 2); make("old.txt", ago: 9); make(".hidden", ago: 0); make("a/b/c/d/deep.txt", ago: 0)
+            let r = RecentFiles.collect(roots: [root], now: now)
+            check(r.map { $0.url.lastPathComponent } == ["new.txt", "mid.txt"] && r.last?.folder == "프로젝트/a", "서랍 최근: 7일 안·숨김·깊이 제외, 최신 순, 폴더 이름")
+            try? fm.removeItem(at: root.deletingLastPathComponent())
+        }
+        // F27 클립보드: 고정은 칩 줄에, 검색하면 목록에도
+        do {
+            var a = ClipItem(kind: .text, text: "a"); a.pinned = true
+            let b = ClipItem(kind: .text, text: "b")
+            check(ClipWindow.listed([a, b], query: "").count == 2, "클립보드: 고정 항목도 목록에(키보드로 고르기)")
+        }
+        check(SnapController.isHelpChord([.control, .option]) && SnapController.isHelpChord([.control, .option, .capsLock]) && !SnapController.isHelpChord([.control, .option, .shift]) && !SnapController.isHelpChord([.control]), "창 정리 도움말: ⌃⌥만")
+        // F27 작업 알림: 승인 대기만 패널
+        check(AgentAlert.showsPanel(.waiting) && !AgentAlert.showsPanel(.done) && !AgentAlert.showsPanel(.failed) && !AgentAlert.showsPanel(.working), "작업 알림: 승인 대기만 패널")
+        check(AgentAlert.askText(["tool_name": "Bash", "tool_input": ["command": "rm -rf build\necho"]]) == "Bash · rm -rf build", "승인 내용: 도구 · 명령 첫 줄")
+        check(AgentAlert.askText(["message": "Claude needs your permission"]) == "Claude needs your permission" && AgentAlert.askText([:]) == nil, "승인 내용: 안내 문구")
         // F26 메뉴 막대 제목
         do {
             var g = Glance(); g.tasks = 3; g.tasksOn = true; g.next = "2:00 치과"
@@ -762,10 +884,6 @@ enum SelfTest {
             check(SessionTitle.read(cut, tail: cutSize - 1) == "한글 중간에서 잘림", "세션 제목: 한글 글자 중간부터 읽어도 제목을 찾음")
             check(SessionTitle.read(write("c.jsonl", [#"{"type":"user"}"#])) == nil && SessionTitle.read(dir.appendingPathComponent("없음").path) == nil, "세션 제목: 없으면 nil")
             try? FileManager.default.removeItem(at: dir)
-            check(!DoneAlert.shouldAnnounce(elapsed: 9, minSeconds: 10, frontApp: nil, sessionApp: "t"), "끝남: 짧은 답은 조용히")
-            check(DoneAlert.shouldAnnounce(elapsed: 10, minSeconds: 10, frontApp: "x", sessionApp: "t"), "끝남: 기준 이상이면 알림")
-            check(!DoneAlert.shouldAnnounce(elapsed: 60, minSeconds: 10, frontApp: "t", sessionApp: "t"), "끝남: 보고 있는 터미널은 조용히")
-            check(DoneAlert.shouldAnnounce(elapsed: nil, minSeconds: 10, frontApp: "x", sessionApp: "t"), "끝남: 시작 시각 모르면 알림")
         }
 
         print(failures == 0 ? "selftest ok" : "selftest: \(failures) failed")

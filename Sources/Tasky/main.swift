@@ -1,6 +1,18 @@
 import AppKit
+import EventKit
 
 if CommandLine.arguments.contains("--selftest") { exit(SelfTest.run()) }
+
+// 권한 상태 보기(앱 번들로 실행해야 정확함): open -n dist/Tasky.app --args --permissions
+if CommandLine.arguments.contains("--permissions") {
+    let text = """
+    손쉬운 사용: \(AXIsProcessTrusted())  화면 기록: \(CGPreflightScreenCaptureAccess())  입력 모니터링: \(CGPreflightListenEventAccess())
+    미리 알림: \(EKEventStore.authorizationStatus(for: .reminder).rawValue)  캘린더: \(EKEventStore.authorizationStatus(for: .event).rawValue)  (3 = 전체 허용)
+    번들: \(Bundle.main.bundleIdentifier ?? "없음")  경로: \(Bundle.main.bundlePath)
+    """
+    try? text.write(toFile: NSTemporaryDirectory() + "tasky-permissions.txt", atomically: true, encoding: .utf8)
+    print(text); exit(0)
+}
 
 // Claude Code·Codex 훅이 실행: Tasky --hook claude|codex
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--hook" { exit(HookClient.run(tool: CommandLine.arguments[2])) }

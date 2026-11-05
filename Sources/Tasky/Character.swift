@@ -136,12 +136,40 @@ enum Effect: String, CaseIterable {
 
     private static var cache: [Effect: NSImage] = [:]
 
+    /// F28 13차 C(빛 입자): 감정 색 기호 + 두 겹 은은한 빛(블룸)
+    private var color: NSColor {
+        switch self {
+        case .heart: NSColor(red: 1, green: 0.30, blue: 0.48, alpha: 1)
+        case .exclaim, .shock: NSColor(red: 1, green: 0.62, blue: 0.1, alpha: 1)
+        case .sparkle, .note: NSColor(red: 1, green: 0.82, blue: 0.3, alpha: 1)
+        case .question, .sweat: NSColor(red: 0.35, green: 0.72, blue: 1, alpha: 1)
+        case .zz, .dots, .puff: NSColor(red: 0.62, green: 0.55, blue: 1, alpha: 1)
+        }
+    }
+
     var image: NSImage? {
         if let img = Self.cache[self] { return img }
         let file = Paths.support.appendingPathComponent("Effects/\(rawValue).png")
-        let img = NSImage(contentsOf: file) ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 64, weight: .bold)
-                .applying(.init(paletteColors: [NSColor(red: 0.36, green: 0.22, blue: 0.12, alpha: 1)])))
+        if let custom = NSImage(contentsOf: file) { Self.cache[self] = custom; return custom }
+        guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 44, weight: .heavy).applying(.init(paletteColors: [.white]))) else { return nil }
+        let size = NSSize(width: 96, height: 96), c = color
+        let img = NSImage(size: size, flipped: false) { r in
+            let g = glyph.size, rect = CGRect(x: (r.width - g.width) / 2, y: (r.height - g.height) / 2, width: g.width, height: g.height)
+            // 바깥 빛 두 겹(넓게·좁게), 그 위에 색 기호, 가운데 흰 심
+            for (blur, alpha) in [(22.0, 0.55), (9.0, 0.9)] {
+                NSGraphicsContext.saveGraphicsState()
+                let sh = NSShadow(); sh.shadowBlurRadius = blur; sh.shadowColor = c.withAlphaComponent(alpha); sh.shadowOffset = .zero; sh.set()
+                glyph.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            let tinted = NSImage(size: g, flipped: false) { tr in
+                glyph.draw(in: tr); c.blended(withFraction: 0.35, of: .white)?.set(); tr.fill(using: .sourceAtop); return true
+            }
+            tinted.draw(in: rect)
+            glyph.draw(in: rect.insetBy(dx: g.width * 0.22, dy: g.height * 0.22), from: .zero, operation: .sourceOver, fraction: 0.55)
+            return true
+        }
         Self.cache[self] = img
         return img
     }

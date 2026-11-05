@@ -90,6 +90,16 @@ enum QuickRun {
 
     // 단축키(id 300): 기본 ⌘⇧P
     static let hotKeyID: UInt32 = 300
+    /// F27 5번 A: 결과 묶음 제목
+    static func section(_ c: QuickCandidate) -> String {
+        switch c.kind {
+        case let .add(_, date, hasTime): return date != nil && hasTime ? "일정·할 일 추가" : "할 일 추가"
+        case .command: return "기능"
+        case .task: return "찾은 할 일·일정"
+        case .clip: return "클립보드"
+        }
+    }
+
     /// 메뉴에 보일 단축키 글("⌘⇧P"), 꺼져 있으면 ""
     static var keyTitle: String { key.map { HotKey.title(keyCode: $0.code, modifiers: $0.mods) } ?? "" }
     static var key: (code: UInt32, mods: UInt32)? {
@@ -129,7 +139,7 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
     private var monitors: [Any] = []
     /// 앱 쪽 동작(설정 열기·잠 안 자기 등)
     var runCommand: (String) -> Void = { _ in }
-    private static let width: CGFloat = 520, rowH: CGFloat = 40
+    private static let width: CGFloat = 540, rowH: CGFloat = 34
 
     func toggle() { panel == nil ? open() : close(restore: true) }
 
@@ -137,10 +147,12 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
         guard panel == nil else { return }
         previousApp = NSWorkspace.shared.frontmostApplication
         let p = FloatingPanel(size: CGSize(width: Self.width, height: 60))
+        p.appearance = NSAppearance(named: .darkAqua)   // 시안의 어두운 유리
         p.keyable = true
         p.level = .popUpMenu
         panel = p
-        input.placeholderString = "할 일 적기, 기능 이름, 찾기 · ↩ 실행 · Esc 닫기"
+        input.placeholderString = "무엇이든 적어 보세요 — 할 일·일정, 기능 이름, 찾기"
+        asTodo = false; selected = 0
         input.font = .systemFont(ofSize: 18)
         input.isBordered = false; input.drawsBackground = false; input.focusRingType = .none
         input.stringValue = ""
@@ -161,9 +173,12 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
             NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.close(restore: false) },
             // ⌘↩는 입력칸의 insertNewline:으로 오지 않으므로 여기서 받는다
             NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-                guard let self, e.window === self.panel, e.keyCode == 36 || e.keyCode == 76,
-                      e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else { return e }
-                self.run(1); return nil
+                guard let self, e.window === self.panel, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else { return e }
+                if e.keyCode == 36 || e.keyCode == 76 { self.run(1); return nil }
+                // ⌘1~9: 그 줄 바로 실행(키 코드로 봐서 한글 자판에서도)
+                let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+                if let n = digits.firstIndex(of: Int(e.keyCode)) { self.run(n); return nil }
+                return e
             },
         ].compactMap { $0 }
         NSApp.activate(ignoringOtherApps: true)   // 사용자가 직접 연 창이라 바로 입력
@@ -178,25 +193,63 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
         if restore { previousApp?.activate() }
     }
 
+    /// F27 5번 C: 일정으로 읽히는 첫 결과는 미리보기 카드로. ⇥로 할 일↔일정 바꾸기
+    private var asTodo = false
+    private let card = QuickCard()
+    private let footer = NSTextField(labelWithString: "↑↓ 고르기 · ↩ 실행 · ⌘1~9 바로 · Esc 닫기")
+    private static let headerH: CGFloat = 22, cardH: CGFloat = 96, footerH: CGFloat = 26
+
+    /// 카드로 보일 첫 결과(일정으로 저장될 입력일 때만, ⇥로 할 일로 바꾼 뒤에도 카드 유지)
+    private var cardItem: QuickCandidate? {
+        guard let first = items.first, case let .add(_, date?, hasTime) = first.kind, hasTime, TaskStore.shared.canAddEvent else { return nil }
+        return first
+    }
+
     private func refresh() {
         guard let p = panel else { return }
         let clips = ClipStore.shared.history.items.compactMap(\.text)
         items = QuickRun.candidates(input.stringValue, tasks: index, clips: clips)
-        selected = min(selected, max(items.count - 1, 0))
+        if cardItem == nil { asTodo = false }
+        selected = min(selected, max(min(items.count, 9) - 1, 0))
         list.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (i, c) in items.prefix(8).enumerated() { list.addArrangedSubview(row(c, on: i == selected, index: i)) }
+        // A: 종류 제목 + 결과 줄(카드로 보인 첫 결과는 목록에서 뺀다)
+        var listH: CGFloat = 0, section = ""
+        for (i, c) in items.prefix(9).enumerated() where !(i == 0 && cardItem != nil) {
+            let sec = QuickRun.section(c)
+            if sec != section {
+                section = sec
+                let h = NSTextField(labelWithString: sec)
+                h.font = .systemFont(ofSize: 11, weight: .bold); h.textColor = .white.withAlphaComponent(0.5)
+                h.translatesAutoresizingMaskIntoConstraints = false
+                h.heightAnchor.constraint(equalToConstant: Self.headerH).isActive = true
+                list.addArrangedSubview(h); listH += Self.headerH + 2
+            }
+            list.addArrangedSubview(row(c, on: i == selected, index: i)); listH += Self.rowH + 2
+        }
+        let showCard = cardItem != nil
+        if let c = cardItem, case let .add(title, date?, _) = c.kind {
+            let f = DateFormatter(); f.locale = Locale(identifier: "ko_KR"); f.dateFormat = "M월 d일 E HH:mm"
+            let cal = TaskStore.shared.eventCalendar()?.title
+            card.set(kind: asTodo ? "할 일로 추가" : "일정으로 추가", color: asTodo ? NSColor(red: 0.54, green: 0.71, blue: 1, alpha: 1) : NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1),
+                     title: title, detail: f.string(from: date) + (asTodo ? " · 미리 알림" : cal.map { " · 캘린더 ‘\($0)’" } ?? ""),
+                     hint: asTodo ? "⇥ 일정으로 바꾸기" : "⇥ 할 일로 바꾸기 · 1시간 전·시작할 때 알려 줘요", on: selected == 0)
+            card.onClick = { [weak self] in self?.run(0) }
+        }
+        card.isHidden = !showCard
 
         // 입력칸은 그대로 두고 크기·목록만 바꾼다(창을 다시 만들면 입력 포커스·한글 조합이 끊긴다)
-        let w = Self.width, listH = CGFloat(min(items.count, 8)) * (Self.rowH + 2)
-        let h = 56 + (listH > 0 ? listH + 10 : 0)
+        let w = Self.width
+        let cardSpace = showCard ? Self.cardH + 10 : 0
+        let h = 56 + cardSpace + (listH > 0 ? listH + 8 : 0) + Self.footerH
         if p.contentView !== root {
-            root.wantsLayer = true; root.layer?.cornerRadius = 20; root.layer?.masksToBounds = true
-            glass = makeGlass(cornerRadius: 20, frame: CGRect(x: 0, y: 0, width: w, height: h))
+            root.wantsLayer = true; root.layer?.cornerRadius = 18; root.layer?.masksToBounds = true
+            glass = makeGlass(cornerRadius: 18, frame: CGRect(x: 0, y: 0, width: w, height: h))
             glass?.autoresizingMask = [.width, .height]
             root.subviews.forEach { $0.removeFromSuperview() }
-            [glass!, icon, input, list].forEach(root.addSubview)
-            icon.contentTintColor = .secondaryLabelColor
-            icon.autoresizingMask = [.minYMargin]; input.autoresizingMask = [.minYMargin]
+            footer.font = .systemFont(ofSize: 10, weight: .medium); footer.textColor = .white.withAlphaComponent(0.45)
+            [glass!, icon, input, card, list, footer].forEach(root.addSubview)
+            icon.contentTintColor = .white.withAlphaComponent(0.6)
+            input.textColor = .white
             p.contentView = root
         }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main ?? NSScreen.screens[0]
@@ -204,26 +257,30 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
         let top = p.isVisible ? p.frame.maxY : v.maxY - v.height / 4
         let x = p.isVisible ? p.frame.minX : v.midX - w / 2
         p.setFrame(CGRect(x: x, y: top - h, width: w, height: h), display: true)
-        icon.frame = CGRect(x: 16, y: h - 40, width: 22, height: 22)
-        input.frame = CGRect(x: 46, y: h - 44, width: w - 62, height: 28)
-        list.frame = CGRect(x: 8, y: 8, width: w - 16, height: listH)
+        icon.frame = CGRect(x: 18, y: h - 40, width: 22, height: 22)
+        input.frame = CGRect(x: 48, y: h - 44, width: w - 64, height: 28)
+        card.frame = CGRect(x: 12, y: h - 56 - Self.cardH, width: w - 24, height: Self.cardH)
+        list.frame = CGRect(x: 8, y: Self.footerH + 4, width: w - 16, height: listH)
+        footer.frame = CGRect(x: 18, y: 6, width: w - 36, height: 14)
     }
 
     private func row(_ c: QuickCandidate, on: Bool, index: Int) -> NSView {
         let v = QuickRow(frame: CGRect(x: 0, y: 0, width: Self.width - 16, height: Self.rowH))
-        v.wantsLayer = true; v.layer?.cornerRadius = 10
-        v.layer?.backgroundColor = on ? NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor : NSColor.clear.cgColor
+        v.wantsLayer = true; v.layer?.cornerRadius = 9
+        v.layer?.backgroundColor = on ? NSColor.systemBlue.withAlphaComponent(0.35).cgColor : NSColor.clear.cgColor
         v.translatesAutoresizingMaskIntoConstraints = false
         v.widthAnchor.constraint(equalToConstant: Self.width - 16).isActive = true
         v.heightAnchor.constraint(equalToConstant: Self.rowH).isActive = true
         let img = NSImageView(image: NSImage(systemSymbolName: c.symbol, accessibilityDescription: nil) ?? NSImage())
-        img.contentTintColor = .labelColor
-        img.frame = CGRect(x: 12, y: 11, width: 18, height: 18)
-        let t = NSTextField(labelWithString: c.title); t.font = .systemFont(ofSize: 14, weight: .medium); t.lineBreakMode = .byTruncatingTail
-        t.frame = CGRect(x: 40, y: 11, width: Self.width - 220, height: 18)
-        let d = NSTextField(labelWithString: c.detail + (index == 0 ? "  ↩" : index == 1 ? "  ⌘↩" : "")); d.font = .systemFont(ofSize: 12); d.textColor = .secondaryLabelColor
+        img.contentTintColor = .white.withAlphaComponent(0.8)
+        img.frame = CGRect(x: 12, y: (Self.rowH - 18) / 2, width: 18, height: 18)
+        let t = NSTextField(labelWithString: c.title); t.font = .systemFont(ofSize: 14, weight: on ? .semibold : .medium); t.lineBreakMode = .byTruncatingTail
+        t.textColor = .white
+        t.frame = CGRect(x: 40, y: (Self.rowH - 18) / 2, width: Self.width - 230, height: 18)
+        let key = index < 9 ? (on ? "↩" : "⌘\(index + 1)") : ""
+        let d = NSTextField(labelWithString: c.detail + "  " + key); d.font = .systemFont(ofSize: 11); d.textColor = .white.withAlphaComponent(0.55)
         d.alignment = .right; d.lineBreakMode = .byTruncatingTail
-        d.frame = CGRect(x: Self.width - 186, y: 12, width: 160, height: 16)
+        d.frame = CGRect(x: Self.width - 196, y: (Self.rowH - 16) / 2, width: 170, height: 16)
         [img, t, d].forEach(v.addSubview)
         v.onClick = { [weak self] in self?.run(index) }
         return v
@@ -236,7 +293,10 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
         case #selector(NSResponder.insertNewline(_:)):
             run(selected); return true
         case #selector(NSResponder.cancelOperation(_:)): close(restore: true); return true
-        case #selector(NSResponder.moveDown(_:)): selected = min(selected + 1, min(items.count, 8) - 1); refresh(); return true
+        case #selector(NSResponder.moveDown(_:)): selected = min(selected + 1, min(items.count, 9) - 1); refresh(); return true
+        case #selector(NSResponder.insertTab(_:)):
+            guard cardItem != nil else { return false }
+            asTodo.toggle(); refresh(); return true
         case #selector(NSResponder.moveUp(_:)): selected = max(selected - 1, 0); refresh(); return true
         default: return false
         }
@@ -248,7 +308,7 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
         switch c.kind {
         case let .add(title, date, hasTime):
             let store = TaskStore.shared
-            if let problem = store.add(title: title, date: date, hasTime: hasTime, asEvent: hasTime && store.canAddEvent) {
+            if let problem = store.add(title: title, date: date, hasTime: hasTime, asEvent: hasTime && store.canAddEvent && !(index == 0 && asTodo)) {
                 NSSound.beep(); input.placeholderString = problem; return
             }
             close(restore: true)
@@ -278,6 +338,43 @@ final class QuickRunWindow: NSObject, NSTextFieldDelegate {
         default: runCommand(id)
         }
     }
+}
+
+/// F27 5번 C: '무엇으로 저장될지' 카드
+private final class QuickCard: NSView {
+    var onClick: () -> Void = {}
+    private let kind = NSTextField(labelWithString: ""), title = NSTextField(labelWithString: ""), detail = NSTextField(labelWithString: ""), hint = NSTextField(labelWithString: "")
+    private let key = NSTextField(labelWithString: "↩")
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true; layer?.cornerRadius = 12
+        kind.font = .systemFont(ofSize: 11, weight: .bold)
+        title.font = .systemFont(ofSize: 17, weight: .bold); title.textColor = .white; title.lineBreakMode = .byTruncatingTail
+        detail.font = .systemFont(ofSize: 12, weight: .medium); detail.textColor = .white.withAlphaComponent(0.7); detail.lineBreakMode = .byTruncatingTail
+        hint.font = .systemFont(ofSize: 10, weight: .medium); hint.textColor = .white.withAlphaComponent(0.5)
+        key.font = .systemFont(ofSize: 11, weight: .semibold); key.textColor = .white.withAlphaComponent(0.8)
+        key.alignment = .center; key.wantsLayer = true; key.layer?.cornerRadius = 5; key.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        [kind, title, detail, hint, key].forEach(addSubview)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func set(kind k: String, color: NSColor, title t: String, detail d: String, hint h: String, on: Bool) {
+        kind.stringValue = k; kind.textColor = color
+        title.stringValue = t; detail.stringValue = d; hint.stringValue = h
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
+        layer?.borderWidth = on ? 1.5 : 0.5
+        layer?.borderColor = (on ? NSColor.systemBlue : NSColor.white.withAlphaComponent(0.15)).cgColor
+        needsLayout = true
+    }
+    override func layout() {
+        super.layout()
+        let w = bounds.width
+        kind.frame = CGRect(x: 14, y: bounds.height - 24, width: w - 80, height: 14)
+        title.frame = CGRect(x: 14, y: bounds.height - 48, width: w - 80, height: 22)
+        detail.frame = CGRect(x: 14, y: bounds.height - 68, width: w - 28, height: 16)
+        hint.frame = CGRect(x: 14, y: 8, width: w - 28, height: 13)
+        key.frame = CGRect(x: w - 40, y: bounds.height - 46, width: 26, height: 18)
+    }
+    override func mouseUp(with event: NSEvent) { onClick() }
 }
 
 private final class QuickRow: NSView {

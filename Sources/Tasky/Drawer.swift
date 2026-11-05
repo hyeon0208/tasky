@@ -220,10 +220,84 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         super.init()
         store.refresh()
         build(size: size)
+        rebuildChips()
         if !store.folders.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) } else { showRoot(nil) }
     }
 
-    static let sideWidth: CGFloat = 180
+    // MARK: 칩 줄과 최근 파일 (F27 8번)
+
+    private let chips = ChipBar()
+    private let recentTable = NSTableView()
+    private let recentScroll = NSScrollView()
+    private var recent: [RecentFiles.Item] = []
+    private var showingRecent = false
+
+    private func rebuildChips() {
+        let sel = showingRecent ? -1 : table.selectedRow
+        var views: [NSView] = [chip("최근", symbol: "clock", on: sel == -1) { [weak self] in self?.showRecent() }]
+        for (i, f) in store.folders.enumerated() {
+            let b = chip(f.name, symbol: store.url(of: f) == nil ? "folder.badge.questionmark" : "folder.fill", on: sel == i) { [weak self] in
+                guard let self else { return }
+                self.showingRecent = false
+                if self.table.selectedRow == i { self.tableViewSelectionDidChange(Notification(name: .init(""))) }
+                else { self.table.selectRowIndexes([i], byExtendingSelection: false) }
+            }
+            let menu = NSMenu()
+            menu.addItem(ClosureMenuItem("Finder에서 보기") { [weak self] in self?.reveal(row: i) })
+            menu.addItem(ClosureMenuItem("서랍에서 빼기") { [weak self] in self?.remove(row: i) })
+            b.menu = menu
+            views.append(b)
+        }
+        let add = chip("", symbol: "plus", on: false) { [weak self] in self?.addFolder() }
+        add.toolTip = "폴더 추가(폴더를 이 줄에 끌어 놓아도 돼요)"
+        views.append(add)
+        chips.setViews(views, in: .leading)
+    }
+
+    private func chip(_ title: String, symbol: String, on: Bool, _ action: @escaping () -> Void) -> ClosureButton {
+        let b = ClosureButton(title, action)
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title.isEmpty ? "추가" : nil)
+        b.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
+        b.isBordered = false; b.wantsLayer = true
+        b.layer?.cornerRadius = 12
+        b.layer?.backgroundColor = (on ? NSColor.controlAccentColor : NSColor.labelColor.withAlphaComponent(0.08)).cgColor
+        b.contentTintColor = on ? .white : .labelColor
+        b.attributedTitle = NSAttributedString(string: title.isEmpty ? "" : " \(title) ", attributes: [.foregroundColor: on ? NSColor.white : NSColor.labelColor, .font: NSFont.systemFont(ofSize: 12, weight: .semibold)])
+        b.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        if title.isEmpty { b.widthAnchor.constraint(equalToConstant: 28).isActive = true }
+        return b
+    }
+
+    private func showRecent() {
+        showingRecent = true
+        browser.isHidden = true; recentScroll.isHidden = false
+        pathControl.url = nil
+        message.stringValue = "고정 폴더에서 최근 7일 동안 바뀐 파일"
+        rebuildChips()
+        let roots = store.folders.compactMap { store.url(of: $0) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let items = RecentFiles.collect(roots: roots, now: Date())
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.showingRecent else { return }
+                self.recent = items
+                self.recentTable.reloadData()
+                if items.isEmpty { self.message.stringValue = roots.isEmpty ? "먼저 ‘+’로 자주 가는 폴더를 넣어 주세요" : "최근 7일 동안 바뀐 파일이 없어요" }
+            }
+        }
+    }
+
+    private func hideRecent() {
+        showingRecent = false
+        browser.isHidden = false; recentScroll.isHidden = true
+    }
+
+    @objc private func openRecent() {
+        let r = recentTable.clickedRow
+        if recent.indices.contains(r) { NSWorkspace.shared.open(recent[r].url) }
+    }
+
+    static let sideWidth: CGFloat = 0   // F27 8번 A: 왼쪽 목록 대신 위 칩 줄(목록 표는 선택 상태로만 쓴다)
+    private static let chipBar: CGFloat = 44
     static let columnWidth: CGFloat = 300
     private static let bar: CGFloat = 56
 
@@ -252,15 +326,26 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         scroll.documentView = table
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
+        scroll.isHidden = true
         view.addSubview(scroll)
 
-        let add = NSButton(title: "+ 폴더 추가", target: self, action: #selector(addFolder))
-        add.bezelStyle = .inline
-        add.frame = CGRect(x: 10, y: 18, width: 100, height: 22)
-        view.addSubview(add)
+        // 위: [최근] [고정 폴더…] [+] 칩 줄. 폴더를 끌어 놓으면 추가
+        chips.frame = CGRect(x: 12, y: size.height - Self.chipBar + 8, width: size.width - 24, height: 28)
+        chips.autoresizingMask = [.width, .minYMargin]
+        chips.orientation = .horizontal; chips.spacing = 6
+        chips.onDrop = { [weak self] urls in
+            guard let self else { return }
+            self.message.stringValue = urls.compactMap { self.store.add($0) }.first ?? ""
+            self.table.reloadData(); self.rebuildChips()
+            self.table.selectRowIndexes([self.store.folders.count - 1], byExtendingSelection: false)
+        }
+        view.addSubview(chips)
+        let chipLine = NSBox(frame: CGRect(x: 0, y: size.height - Self.chipBar, width: size.width, height: 1))
+        chipLine.boxType = .separator; chipLine.autoresizingMask = [.width, .minYMargin]
+        view.addSubview(chipLine)
 
         // 오른쪽: 칼럼 탐색. 칼럼 너비는 고정이고, 칼럼이 늘면 서랍이 넓어진다.
-        browser.frame = CGRect(x: sideWidth + 1, y: bar, width: size.width - sideWidth - 1, height: size.height - bar - 10)
+        browser.frame = CGRect(x: sideWidth + 1, y: bar, width: size.width - sideWidth - 1, height: size.height - bar - Self.chipBar - 2)
         browser.autoresizingMask = [.width, .height]
         browser.delegate = self
         browser.onEscape = { [weak self] in self?.onClose() }
@@ -283,10 +368,19 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         browser.menu = itemMenu
         view.addSubview(browser)
 
-        let divider = NSBox(frame: CGRect(x: sideWidth, y: 0, width: 1, height: size.height))
-        divider.boxType = .separator
-        divider.autoresizingMask = [.height]
-        view.addSubview(divider)
+        // '최근' 목록(브라우저 자리에 겹쳐 보인다)
+        recentScroll.frame = browser.frame
+        recentScroll.autoresizingMask = [.width, .height]
+        recentScroll.drawsBackground = false; recentScroll.hasVerticalScroller = true
+        recentTable.addTableColumn(NSTableColumn(identifier: .init("recent")))
+        recentTable.headerView = nil; recentTable.rowHeight = 40; recentTable.style = .plain
+        recentTable.backgroundColor = .clear
+        recentTable.dataSource = self; recentTable.delegate = self
+        recentTable.target = self; recentTable.doubleAction = #selector(openRecent)
+        recentTable.setDraggingSourceOperationMask([.copy, .move], forLocal: false)
+        recentScroll.documentView = recentTable
+        recentScroll.isHidden = true
+        view.addSubview(recentScroll)
         let line = NSBox(frame: CGRect(x: sideWidth, y: bar - 1, width: size.width - sideWidth, height: 1))
         line.boxType = .separator
         line.autoresizingMask = [.width]
@@ -385,9 +479,10 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 
     // MARK: 저장한 폴더 목록
 
-    func numberOfRows(in tableView: NSTableView) -> Int { store.folders.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { tableView === recentTable ? recent.count : store.folders.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView === recentTable { return recentCell(recent[row]) }
         let f = store.folders[row]
         let missing = store.url(of: f) == nil
         let cell = NSTableCellView()
@@ -404,7 +499,25 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         return cell
     }
 
+    private func recentCell(_ item: RecentFiles.Item) -> NSView {
+        let cell = NSTableCellView()
+        let icon = NSImageView(image: NSWorkspace.shared.icon(forFile: item.url.path))
+        icon.frame = CGRect(x: 8, y: 4, width: 32, height: 32)
+        let name = NSTextField(labelWithString: item.url.lastPathComponent)
+        name.font = .systemFont(ofSize: 13, weight: .semibold); name.lineBreakMode = .byTruncatingMiddle
+        name.frame = CGRect(x: 48, y: 20, width: 420, height: 17)
+        let f = RelativeDateTimeFormatter(); f.locale = Locale(identifier: "ko_KR"); f.unitsStyle = .short
+        let sub = NSTextField(labelWithString: item.folder + " · " + f.localizedString(for: item.date, relativeTo: Date()))
+        sub.font = .systemFont(ofSize: 11); sub.textColor = .secondaryLabelColor
+        sub.frame = CGRect(x: 48, y: 4, width: 420, height: 15)
+        [icon, name, sub].forEach(cell.addSubview)
+        return cell
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if (notification.object as? NSTableView) === recentTable { return }
+        hideRecent()
+        defer { rebuildChips() }
         let row = table.selectedRow
         guard row >= 0 else { showRoot(nil); return }
         let f = store.folders[row]
@@ -418,6 +531,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 
     // 목록 순서 바꾸기와, Finder에서 폴더를 끌어와 추가하기
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        if tableView === recentTable { return recent[row].url as NSURL }   // 최근 파일은 끌어서 꺼낸다
         let item = NSPasteboardItem()
         item.setString(String(row), forType: Self.tablePasteType)
         return item
@@ -433,7 +547,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
                    dropOperation: NSTableView.DropOperation) -> Bool {
         if let s = info.draggingPasteboard.pasteboardItems?.first?.string(forType: Self.tablePasteType), let from = Int(s) {
             store.move(from: from, to: row)
-            table.reloadData()
+            table.reloadData(); rebuildChips()
             return true
         }
         let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
@@ -443,7 +557,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         return true
     }
 
-    @objc private func addFolder() {
+    @objc private func addFolder() {   // 칩 줄의 '+'
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -455,21 +569,21 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         store.pinned = pinButton.state == .on
         guard ok else { return }
         message.stringValue = panel.urls.compactMap { store.add($0) }.first ?? ""
-        table.reloadData()
+        table.reloadData(); rebuildChips()
         table.selectRowIndexes([store.folders.count - 1], byExtendingSelection: false)
     }
 
-    private func revealClicked() {
-        let row = table.clickedRow
-        guard row >= 0, let url = store.url(of: store.folders[row]) else { return }
+    private func revealClicked() { reveal(row: table.clickedRow) }
+    private func reveal(row: Int) {
+        guard row >= 0, row < store.folders.count, let url = store.url(of: store.folders[row]) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    private func removeClicked() {
-        let row = table.clickedRow
-        guard row >= 0 else { return }
+    private func removeClicked() { remove(row: table.clickedRow) }
+    private func remove(row: Int) {
+        guard row >= 0, row < store.folders.count else { return }
         store.remove(at: row)
-        table.reloadData()
+        table.reloadData(); rebuildChips()
         if !store.folders.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) } else { showRoot(nil) }
     }
 
@@ -477,7 +591,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 
     private func showRoot(_ node: FileNode?) {
         root = node
-        message.stringValue = node == nil && store.folders.isEmpty ? "왼쪽 아래 ‘+ 폴더 추가’로 자주 가는 폴더를 넣어 주세요" : ""
+        message.stringValue = node == nil && store.folders.isEmpty ? "위 ‘+’로 자주 가는 폴더를 넣어 주세요" : ""
         browser.loadColumnZero()
         if let node, node.denied { message.stringValue = Self.deniedMessage }
         updateLayout()
@@ -762,6 +876,43 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 }
 
 /// 창 가장자리의 크기 조절 영역. 변은 8pt 두께, 모서리는 16pt 정사각형.
+/// F27 8번: 고정 폴더들에서 최근 바뀐 파일(깊이 3, 숨김 제외, 최신 순, 최대 200개)
+enum RecentFiles {
+    struct Item { let url: URL; let folder: String; let date: Date }
+    static func collect(roots: [URL], now: Date, days: Int = 7, depth: Int = 3, limit: Int = 200) -> [Item] {
+        let since = now.addingTimeInterval(-Double(days) * 86400)
+        var out: [Item] = []
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
+        for root in roots {
+            guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+            for case let url as URL in e {
+                if e.level > depth { e.skipDescendants(); continue }
+                guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true,
+                      let d = v.contentModificationDate, d >= since, d <= now.addingTimeInterval(60) else { continue }
+                // /var ↔ /private/var 같은 링크 차이를 없애고 '고정 폴더 이름/하위'로
+                let base = root.resolvingSymlinksInPath().deletingLastPathComponent().path
+                let dir = url.resolvingSymlinksInPath().deletingLastPathComponent().path
+                let rel = (dir.hasPrefix(base) ? String(dir.dropFirst(base.count)) : url.deletingLastPathComponent().lastPathComponent).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                out.append(Item(url: url, folder: rel, date: d))
+            }
+        }
+        return Array(out.sorted { $0.date > $1.date }.prefix(limit))
+    }
+}
+
+/// 폴더를 끌어 놓을 수 있는 칩 줄
+final class ChipBar: NSStackView {
+    var onDrop: ([URL]) -> Void = { _ in }
+    override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([.fileURL]) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        onDrop(urls)
+        return !urls.isEmpty
+    }
+}
+
 final class ResizeEdge: NSView {
     enum Kind: CaseIterable { case left, right, top, bottom, topLeft, topRight, bottomLeft, bottomRight }
     private let kind: Kind

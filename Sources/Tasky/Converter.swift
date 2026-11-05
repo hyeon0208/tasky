@@ -15,6 +15,8 @@ enum ConvertOp: String, CaseIterable {
     case docToPDF, docToDOCX, docToTXT, docToRTF, docToHTML
     case sheetToCSV
     case zip, unarchive
+    // F27 9번: 종류별 변환 늘리기
+    case toTIFF, pdfToJPG, pdfToText, pdfShrink, pdfSplit, pdfToDOCX, docToODT, csvToXLSX, sheetToPDF, toMOV, posterFrame, toAIFF
 
     var title: String {
         switch self {
@@ -46,6 +48,18 @@ enum ConvertOp: String, CaseIterable {
         case .sheetToCSV: "CSV로 (시트마다)"
         case .zip: "ZIP으로 압축"
         case .unarchive: "압축 풀기"
+        case .toTIFF: "TIFF로"
+        case .pdfToJPG: "페이지를 JPG로"
+        case .pdfToText: "글자만 TXT로"
+        case .pdfShrink: "PDF 용량 줄이기"
+        case .pdfSplit: "페이지마다 PDF로"
+        case .pdfToDOCX: "Word(DOCX)로 (글자만)"
+        case .docToODT: "ODT로"
+        case .csvToXLSX: "엑셀(XLSX)로"
+        case .sheetToPDF: "PDF로 (단순 표)"
+        case .toMOV: "MOV로"
+        case .posterFrame: "대표 사진(JPG)"
+        case .toAIFF: "AIFF로"
         }
     }
 
@@ -68,11 +82,128 @@ enum ConvertOp: String, CaseIterable {
         case .sheetToCSV: "tablecells"
         case .zip: "archivebox"
         case .unarchive: "shippingbox.and.arrow.backward"
+        case .toTIFF: "photo"
+        case .pdfToJPG: "doc.richtext"
+        case .pdfToText, .pdfToDOCX, .docToODT: "doc.text"
+        case .pdfShrink: "arrow.down.circle"
+        case .pdfSplit: "doc.on.doc"
+        case .csvToXLSX, .sheetToPDF: "tablecells"
+        case .toMOV: "film"
+        case .posterFrame: "photo.on.rectangle"
+        case .toAIFF: "waveform"
         }
     }
 
+    /// F27 원형 변환 칸 이름(짧게)
+    var short: String {
+        switch self {
+        case .toJPEG: "JPEG"
+        case .toPNG: "PNG"
+        case .toHEIC: "HEIC"
+        case .toTIFF: "TIFF"
+        case .imagesToPDF: "PDF"
+        case .long1920: "긴 변 1920"
+        case .long1280: "긴 변 1280"
+        case .shrink, .pdfShrink: "용량 줄이기"
+        case .stripInfo: "위치정보 빼기"
+        case .removeBackground: "배경 빼기"
+        case .extractText: "글자 꺼내기"
+        case .pdfMerge: "합치기"
+        case .pdfToPNG: "PNG"
+        case .pdfToJPG: "JPG"
+        case .pdfToText: "텍스트"
+        case .pdfToDOCX, .docToDOCX: "Word"
+        case .pdfSplit: "페이지 나누기"
+        case .toMP4: "MP4"
+        case .toHEVC: "HEVC"
+        case .toMOV: "MOV"
+        case .to720p: "720p"
+        case .audioOnly: "소리만"
+        case .toGIF: "GIF"
+        case .posterFrame: "대표 사진"
+        case .toM4A: "M4A"
+        case .toWAV: "WAV"
+        case .toMP3: "MP3"
+        case .toAIFF: "AIFF"
+        case .docToPDF, .sheetToPDF: "PDF"
+        case .docToTXT: "TXT"
+        case .docToRTF: "RTF"
+        case .docToHTML: "HTML"
+        case .docToODT: "ODT"
+        case .sheetToCSV: "CSV"
+        case .csvToXLSX: "XLSX"
+        case .zip: "ZIP"
+        case .unarchive: "압축 풀기"
+        }
+    }
+
+    /// 칸 아래 짧은 설명(품질 제한 칸은 꼭 밝힌다)
+    var note: String? {
+        switch self {
+        case .toPNG: "투명 유지"
+        case .imagesToPDF: "한 파일로"
+        case .shrink: "JPEG 60%"
+        case .stripInfo: "GPS·촬영 정보"
+        case .removeBackground: "투명 PNG"
+        case .extractText: "TXT로"
+        case .pdfToPNG, .pdfToJPG: "쪽마다"
+        case .pdfToText: "TXT"
+        case .pdfToDOCX: "글자만"
+        case .pdfSplit: "쪽마다 PDF"
+        case .toMP4: "H.264"
+        case .to720p: "줄이기"
+        case .audioOnly: "M4A"
+        case .toGIF: "앞 10초"
+        case .posterFrame: "JPG 1장"
+        case .sheetToCSV: "시트마다"
+        case .sheetToPDF: "단순 표"
+        case .zip: "압축"
+        default: nil
+        }
+    }
+
+    /// 안쪽 고리(무엇으로 = 형식)인지, 바깥 고리(무엇을 = 동작)인지
+    var isFormat: Bool {
+        switch self {
+        case .toJPEG, .toPNG, .toHEIC, .toTIFF, .imagesToPDF, .pdfToPNG, .pdfToJPG, .pdfToText, .pdfToDOCX,
+             .toMP4, .toHEVC, .toMOV, .toGIF, .toM4A, .toWAV, .toMP3, .toAIFF,
+             .docToPDF, .docToDOCX, .docToTXT, .docToRTF, .docToHTML, .docToODT, .sheetToCSV, .csvToXLSX, .sheetToPDF: true
+        default: false
+        }
+    }
+
+    /// 형식 칸의 결과 확장자(같은 형식이면 칸을 뺀다)
+    var outputExt: String? {
+        switch self {
+        case .toJPEG: "jpeg"
+        case .toPNG: "png"
+        case .toHEIC: "heic"
+        case .toTIFF: "tiff"
+        case .toMP4: "mp4"
+        case .toMOV: "mov"
+        case .toM4A: "m4a"
+        case .toWAV: "wav"
+        case .toMP3: "mp3"
+        case .toAIFF: "aiff"
+        case .docToDOCX: "docx"
+        case .docToTXT: "txt"
+        case .docToRTF: "rtf"
+        case .docToHTML: "html"
+        case .docToODT: "odt"
+        case .csvToXLSX: "xlsx"
+        case .sheetToCSV: "csv"
+        default: nil
+        }
+    }
+
+    /// jpg→jpeg, tif→tiff, aif→aiff, htm→html
+    static func normalizedExt(_ ext: String) -> String {
+        let e = ext.lowercased()
+        return ["jpg": "jpeg", "tif": "tiff", "aif": "aiff", "htm": "html"][e] ?? e
+    }
+
     /// 여러 파일을 결과 하나로 합치는 작업
-    var combines: Bool { self == .pdfMerge || self == .imagesToPDF || self == .zip }
+    var combines: Bool { self == .pdfMerge || self == .imagesToPDF || self == .zip }   // imagesToPDF는 1장도 PDF로(F27)
 
     enum Kind { case image, pdf, video, audio, document, sheet, archive, other }
 
@@ -82,7 +213,7 @@ enum ConvertOp: String, CaseIterable {
     static func kind(of url: URL) -> Kind {
         let ext = url.pathExtension.lowercased()
         if documentExts.contains(ext) { return .document }
-        if ext == "xlsx" { return .sheet }
+        if ext == "xlsx" || ext == "csv" { return .sheet }
         if archiveExts.contains(ext) { return .archive }
         guard let t = UTType(filenameExtension: ext) else { return .other }
         if t.conforms(to: .pdf) { return .pdf }
@@ -103,23 +234,20 @@ enum ConvertOp: String, CaseIterable {
         guard kinds.count == 1, let k = kinds.first else { return [] }
         let multi = urls.count > 1
         let mp3: [ConvertOp] = Converter.tool("ffmpeg") != nil ? [.toMP3] : []
+        let exts = Set(urls.map { ConvertOp.normalizedExt($0.pathExtension) })
+        let ops: [ConvertOp]
         switch k {
-        case .image: return [.toJPEG, .toPNG, .toHEIC, .long1920, .long1280, .shrink, .stripInfo, .removeBackground, .extractText]
-                            + (multi ? [.imagesToPDF] : [])
-        case .pdf: return [.pdfToPNG] + (multi ? [.pdfMerge] : [])
-        case .video: return [.toMP4, .toHEVC, .to720p, .audioOnly, .toGIF] + mp3
-        case .audio: return [.toM4A, .toWAV] + mp3
-        case .document:
-            let ext = Set(urls.map { $0.pathExtension.lowercased() })
-            return [.docToPDF, .docToDOCX, .docToTXT, .docToRTF, .docToHTML].filter { op in
-                // 같은 형식으로 바꾸는 칸은 빼기
-                !(ext == ["docx"] && op == .docToDOCX) && !(ext == ["txt"] && op == .docToTXT)
-                    && !(ext == ["rtf"] && op == .docToRTF) && !(ext.isSubset(of: ["html", "htm"]) && op == .docToHTML)
-            }
-        case .sheet: return [.sheetToCSV]
+        case .image: ops = [.toJPEG, .toPNG, .toHEIC, .toTIFF, .imagesToPDF, .long1920, .long1280, .shrink, .stripInfo, .removeBackground, .extractText]
+        case .pdf: ops = [.pdfToPNG, .pdfToJPG, .pdfToText, .pdfToDOCX] + (multi ? [.pdfMerge] : []) + [.pdfShrink, .pdfSplit]
+        case .video: ops = [.toMP4, .toHEVC, .toMOV, .toGIF, .to720p, .audioOnly] + mp3 + [.posterFrame]
+        case .audio: ops = [.toM4A, .toWAV] + mp3 + [.toAIFF]
+        case .document: ops = [.docToPDF, .docToDOCX, .docToTXT, .docToRTF, .docToHTML, .docToODT]
+        case .sheet: ops = exts == ["csv"] ? [.csvToXLSX, .sheetToPDF] : exts == ["xlsx"] ? [.sheetToCSV, .sheetToPDF] : []
         case .archive: return [.unarchive]
         case .other: return []
         }
+        // 같은 형식으로 바꾸는 칸은 빼기(모든 종류)
+        return ops.filter { op in op.outputExt.map { !(exts.count == 1 && exts.contains($0)) } ?? true }
     }
 }
 
@@ -189,7 +317,7 @@ enum Converter {
                 guard let page = PDFPage(image: NSImage(cgImage: cg, size: .zero)) else { throw ConvertError("PDF 페이지를 만들 수 없어요") }
                 doc.insert(page, at: doc.pageCount)
             }
-            return [try finalizePDF(doc, from: src, label: "합침")]
+            return [try finalizePDF(doc, from: src, label: urls.count > 1 ? "합침" : "PDF")]
         case .pdfToPNG:
             guard let doc = PDFDocument(url: src) else { throw ConvertError("PDF를 열 수 없어요") }
             return try (0..<doc.pageCount).map { i in
@@ -216,6 +344,62 @@ enum Converter {
         case .docToHTML: return [try textutil(src, "html")]
         case .sheetToCSV: return try XLSX.toCSV(src)
         case .zip: return [try zip(urls)]
+        case .toTIFF: return [try reencode(src, .tiff, quality: nil)]
+        case .pdfToJPG:
+            guard let doc = PDFDocument(url: src) else { throw ConvertError("PDF를 열 수 없어요") }
+            return try (0..<doc.pageCount).map { i in
+                let page = doc.page(at: i)!
+                let box = page.bounds(for: .mediaBox)
+                let img = page.thumbnail(of: CGSize(width: box.width * 2, height: box.height * 2), for: .mediaBox)
+                guard let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { throw ConvertError("페이지를 그릴 수 없어요") }
+                return try finalize(writeImage(cg, .jpeg, quality: 0.9), from: src, ext: "jpg", label: "p\(i + 1)")
+            }
+        case .pdfToText:
+            guard let doc = PDFDocument(url: src) else { throw ConvertError("PDF를 열 수 없어요") }
+            guard let text = doc.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ConvertError("글자가 없는 PDF예요(스캔본이면 사진으로 바꾼 뒤 '글자 꺼내기')") }
+            let tmp = tempURL(ext: "txt")
+            try text.write(to: tmp, atomically: true, encoding: .utf8)
+            return [try finalize(tmp, from: src, ext: "txt")]
+        case .pdfToDOCX:
+            guard let doc = PDFDocument(url: src) else { throw ConvertError("PDF를 열 수 없어요") }
+            let all = NSMutableAttributedString()
+            for i in 0..<doc.pageCount {
+                if let a = doc.page(at: i)?.attributedString { all.append(a); all.append(NSAttributedString(string: "\n\n")) }
+            }
+            guard !all.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ConvertError("글자가 없는 PDF예요") }
+            let data = try all.data(from: NSRange(location: 0, length: all.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML])
+            let tmp = tempURL(ext: "docx")
+            try data.write(to: tmp)
+            return [try finalize(tmp, from: src, ext: "docx")]
+        case .pdfShrink:
+            guard let doc = PDFDocument(url: src) else { throw ConvertError("PDF를 열 수 없어요") }
+            let tmp = tempURL(ext: "pdf")
+            guard doc.write(to: tmp, withOptions: [.saveImagesAsJPEGOption: true, .optimizeImagesForScreenOption: true]) else { throw ConvertError("PDF를 저장하지 못했어요") }
+            return [try finalize(tmp, from: src, ext: "pdf", label: "작게")]
+        case .pdfSplit:
+            guard let doc = PDFDocument(url: src), doc.pageCount > 0 else { throw ConvertError("PDF를 열 수 없어요") }
+            return try (0..<doc.pageCount).map { i in
+                let one = PDFDocument()
+                if let p = doc.page(at: i)?.copy() as? PDFPage { one.insert(p, at: 0) }
+                return try finalizePDF(one, from: src, label: "p\(i + 1)")
+            }
+        case .docToODT: return [try textutil(src, "odt")]
+        case .csvToXLSX: return [try XLSX.write(rows: XLSX.parseCSV(String(decoding: Data(contentsOf: src), as: UTF8.self)), from: src)]
+        case .sheetToPDF:
+            let rows = src.pathExtension.lowercased() == "csv"
+                ? XLSX.parseCSV(String(decoding: try Data(contentsOf: src), as: UTF8.self))
+                : try XLSX.sheets(src).first?.rows ?? []
+            guard !rows.isEmpty else { throw ConvertError("표가 비어 있어요") }
+            return [try finalize(TablePDF.render(rows), from: src, ext: "pdf")]
+        case .toMOV: return [try export(src, preset: AVAssetExportPresetHighestQuality, type: .mov, ext: "mov")]
+        case .posterFrame:
+            let asset = AVURLAsset(url: src)
+            let gen = AVAssetImageGenerator(asset: asset)
+            gen.appliesPreferredTrackTransform = true
+            let mid = CMTime(seconds: max(0, CMTimeGetSeconds(asset.duration) / 2), preferredTimescale: 600)
+            guard let cg = try? gen.copyCGImage(at: mid, actualTime: nil) else { throw ConvertError("장면을 꺼내지 못했어요") }
+            return [try finalize(writeImage(cg, .jpeg, quality: 0.9), from: src, ext: "jpg", label: "대표 사진")]
+        case .toAIFF: return [try pcm(src, ext: "aiff", bigEndian: true)]
         case .unarchive:
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -359,14 +543,17 @@ enum Converter {
         return try finalize(tmp, from: src, ext: "gif")
     }
 
-    private static func wav(_ src: URL) throws -> URL {
+    private static func wav(_ src: URL) throws -> URL { try pcm(src, ext: "wav", bigEndian: false) }
+
+    /// 무압축 PCM(WAV는 리틀 엔디언, AIFF는 빅 엔디언). 파일 종류는 확장자로 정해진다
+    private static func pcm(_ src: URL, ext: String, bigEndian: Bool) throws -> URL {
         let input = try AVAudioFile(forReading: src)
         let format = input.processingFormat
-        let tmp = tempURL(ext: "wav")
+        let tmp = tempURL(ext: ext)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate,
             AVNumberOfChannelsKey: format.channelCount, AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: bigEndian,
         ]
         do {
             let output = try AVAudioFile(forWriting: tmp, settings: settings, commonFormat: format.commonFormat, interleaved: format.isInterleaved)
@@ -377,7 +564,7 @@ enum Converter {
                 try output.write(from: buffer)
             }
         }
-        return try finalize(tmp, from: src, ext: "wav")
+        return try finalize(tmp, from: src, ext: ext)
     }
 
     // MARK: 문서·압축·외부 도구
@@ -454,7 +641,7 @@ enum Converter {
 
     // MARK: 파일 이름
 
-    private static func tempURL(ext: String) -> URL {
+    static func tempURL(ext: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString).\(ext)")
     }
 
@@ -488,7 +675,8 @@ enum Converter {
 /// xlsx → 시트마다 CSV. 외부 라이브러리 없이 압축을 풀어 XML을 읽는다.
 /// shortcut: 날짜·수식은 저장된 값(숫자) 그대로 내보낸다, 서식이 필요해지면 numFmt 해석을 더한다.
 enum XLSX {
-    static func toCSV(_ src: URL) throws -> [URL] {
+    /// 시트마다 (이름, 줄). 엑셀 파일은 zip이라 임시 폴더에 풀어 XML만 읽는다
+    static func sheets(_ src: URL) throws -> [(name: String, rows: [[String]])] {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: dir) }
@@ -503,20 +691,85 @@ enum XLSX {
             .elements("Relationship").compactMap { a in a["Id"].flatMap { id in a["Target"].map { (id, $0) } } }) { a, _ in a }
         let sheets = XMLItems(url: dir.appendingPathComponent("xl/workbook.xml")).elements("sheet")
         guard !sheets.isEmpty else { throw ConvertError("시트를 찾지 못했어요") }
-
-        var outputs: [URL] = []
-        for sheet in sheets {
-            guard let rid = sheet["r:id"], var target = rels[rid] else { continue }
+        return sheets.compactMap { sheet in
+            guard let rid = sheet["r:id"], var target = rels[rid] else { return nil }
             if target.hasPrefix("/") { target.removeFirst() } else { target = "xl/" + target }
-            let rows = XMLItems(url: dir.appendingPathComponent(target)).cells(shared: shared)
-            let csv = rows.map { $0.map(quote).joined(separator: ",") }.joined(separator: "\r\n")
-            let tmp = fm.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString).csv")
+            return (sheet["name"] ?? "시트", XMLItems(url: dir.appendingPathComponent(target)).cells(shared: shared))
+        }
+    }
+
+    static func toCSV(_ src: URL) throws -> [URL] {
+        let all = try sheets(src)
+        return try all.map { sheet in
+            let csv = sheet.rows.map { $0.map(quote).joined(separator: ",") }.joined(separator: "\r\n")
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString).csv")
             // 엑셀에서 한글이 깨지지 않도록 BOM을 붙인다
             try (Data([0xEF, 0xBB, 0xBF]) + Data(csv.utf8)).write(to: tmp)
-            let label = sheets.count > 1 ? (sheet["name"] ?? "시트") : nil
-            outputs.append(try Converter.finalize(tmp, from: src, ext: "csv", label: label))
+            return try Converter.finalize(tmp, from: src, ext: "csv", label: all.count > 1 ? sheet.name : nil)
         }
-        return outputs
+    }
+
+    /// RFC 4180 CSV 읽기(따옴표 안의 쉼표·줄바꿈·"" 처리, 앞 BOM 무시)
+    static func parseCSV(_ text: String) -> [[String]] {
+        var rows: [[String]] = [], row: [String] = [], field = "", quoted = false
+        var chars = Array(text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text)
+        chars.append("\n")
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if quoted {
+                if c == "\"" { if i + 1 < chars.count, chars[i + 1] == "\"" { field.append("\""); i += 1 } else { quoted = false } }
+                else { field.append(c) }
+            } else if c == "\"" { quoted = true }
+            else if c == "," { row.append(field); field = "" }
+            else if c == "\n" || c == "\r\n" || c == "\r" {
+                row.append(field); field = ""
+                if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
+                row = []
+            } else { field.append(c) }
+            i += 1
+        }
+        return rows
+    }
+
+    /// 가장 작은 엑셀 파일 한 장(숫자는 숫자로, 나머지는 글자). 직접 XML을 쓰고 ditto로 묶는다
+    static func write(rows: [[String]], from src: URL) throws -> URL {
+        let fm = FileManager.default
+        let stage = fm.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: stage) }
+        func put(_ path: String, _ xml: String) throws {
+            let url = stage.appendingPathComponent(path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(xml.utf8).write(to: url)
+        }
+        let head = #"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#
+        try put("[Content_Types].xml", head + #"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#)
+        try put("_rels/.rels", head + #"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#)
+        try put("xl/workbook.xml", head + #"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#)
+        try put("xl/_rels/workbook.xml.rels", head + #"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#)
+        try put("xl/worksheets/sheet1.xml", head + #"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"# + sheetXML(rows) + "</sheetData></worksheet>")
+        let out = Converter.tempURL(ext: "xlsx")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        p.arguments = ["-c", "-k", "--norsrc", stage.path, out.path]
+        try p.run(); p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw ConvertError("엑셀 파일을 만들지 못했어요") }
+        return try Converter.finalize(out, from: src, ext: "xlsx")
+    }
+
+    /// 시트 XML의 줄들(자체 검사 대상)
+    static func sheetXML(_ rows: [[String]]) -> String {
+        func letters(_ n: Int) -> String { n < 26 ? String(UnicodeScalar(65 + n)!) : letters(n / 26 - 1) + letters(n % 26) }
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        return rows.enumerated().map { r, row in
+            "<row r=\"\(r + 1)\">" + row.enumerated().map { c, v in
+                let ref = letters(c) + "\(r + 1)"
+                if !v.isEmpty, Double(v) != nil, !v.hasPrefix("0") || v == "0" || v.hasPrefix("0.") { return "<c r=\"\(ref)\"><v>\(v)</v></c>" }
+                return "<c r=\"\(ref)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(esc(v))</t></is></c>"
+            }.joined() + "</row>"
+        }.joined()
     }
 
     static func quote(_ s: String) -> String {
@@ -526,6 +779,46 @@ enum XLSX {
     /// "B12" → 1 (0부터)
     static func column(_ ref: String) -> Int {
         ref.prefix { $0.isLetter }.uppercased().unicodeScalars.reduce(0) { $0 * 26 + Int($1.value) - 64 } - 1
+    }
+}
+
+/// F27 표 → PDF(단순 표): A4 가로, 칸 너비는 글자 수로, 넘치면 다음 쪽. 글자·선만 그린다
+enum TablePDF {
+    static func render(_ rows: [[String]]) throws -> URL {
+        let url = Converter.tempURL(ext: "pdf")
+        var box = CGRect(x: 0, y: 0, width: 842, height: 595)
+        guard let ctx = CGContext(url as CFURL, mediaBox: &box, nil as CFDictionary?) else { throw ConvertError("PDF를 만들지 못했어요") }
+        let font = NSFont.systemFont(ofSize: 9), bold = NSFont.boldSystemFont(ofSize: 9)
+        let cols = rows.map(\.count).max() ?? 0
+        let margin: CGFloat = 36, rowH: CGFloat = 16
+        var widths = (0..<cols).map { c in min(200, max(36, rows.prefix(200).map { c < $0.count ? ($0[c] as NSString).size(withAttributes: [.font: font]).width + 10 : 0 }.max() ?? 0)) }
+        let total = widths.reduce(0, +), avail = box.width - margin * 2
+        if total > avail { widths = widths.map { $0 * avail / total } }
+        let para = NSMutableParagraphStyle(); para.lineBreakMode = .byTruncatingTail
+        let prev = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        defer { NSGraphicsContext.current = prev }
+        var y: CGFloat = 0
+        for (r, row) in rows.enumerated() {
+            if r == 0 || y - rowH < margin {
+                if r > 0 { ctx.endPDFPage() }
+                ctx.beginPDFPage(nil)
+                y = box.height - margin
+            }
+            var x = margin
+            for (c, w) in widths.enumerated() {
+                let text = c < row.count ? row[c] : ""
+                (text as NSString).draw(in: CGRect(x: x + 4, y: y - rowH + 3, width: w - 8, height: rowH - 4),
+                                        withAttributes: [.font: r == 0 ? bold : font, .paragraphStyle: para, .foregroundColor: NSColor.black])
+                x += w
+            }
+            ctx.setStrokeColor(gray: 0.8, alpha: 1); ctx.setLineWidth(0.5)
+            ctx.move(to: CGPoint(x: margin, y: y - rowH)); ctx.addLine(to: CGPoint(x: x, y: y - rowH)); ctx.strokePath()
+            y -= rowH
+        }
+        ctx.endPDFPage()
+        ctx.closePDF()
+        return url
     }
 }
 

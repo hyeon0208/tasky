@@ -44,6 +44,7 @@ final class Capture {
     }
 
     static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
+    private static var askedThisRun = false
 
     static func openPermission() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
@@ -58,6 +59,8 @@ final class Capture {
     /// 켜져 있으면 단축키를 건다. 다른 단축키(클립보드·창 정리)와 겹치면 건너뛴다.
     func start() {
         stop()
+        // 켜 둔 채인데 권한이 없으면(서명이 바뀐 뒤 등) 실행마다 한 번 다시 묻는다
+        if Self.enabled, !Self.hasPermission, !Self.askedThisRun { Self.askedThisRun = true; CGRequestScreenCaptureAccess() }
         guard Self.enabled else { onChange(); return }
         let system = SystemHotKeys.load()
         var used: [(code: UInt32, mods: UInt32)] = ClipWatcher.enabled ? [(HotKey.keyCode, HotKey.modifiers)] : []
@@ -101,7 +104,26 @@ final class Capture {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { if (try? p.run()) == nil { self.busy = false } }
     }
 
+    /// F27 10번: 오늘 찍은 캡처(이번 실행 동안, 최근 순, 최대 5장). 날이 바뀌면 비운다
+    private(set) var today: [(date: Date, png: Data)] = []
+    func todayShots(now: Date = Date()) -> [(date: Date, png: Data)] {
+        today.removeAll { !Calendar.current.isDate($0.date, inSameDayAs: now) }
+        return today
+    }
+
+    /// 띠에서 다시 열기: 클립보드에 넣고 미리보기
+    func reopen(_ png: Data) {
+        guard let image = NSImage(data: png) else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setData(png, forType: .png)
+        preview?.close()
+        preview = CapturePreview(image: image, png: png)
+    }
+
     private func captured(_ image: NSImage, png: Data) {
+        today.insert((Date(), png), at: 0)
+        if today.count > 5 { today.removeLast(today.count - 5) }   // 띠에 보이는 5장만 들고 있는다
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setData(png, forType: .png)
@@ -250,5 +272,67 @@ final class CapturePreview: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         if operation != [] { close() }
+    }
+}
+
+/// F27 10번 C: 오늘 찍은 캡처 띠. 원형 메뉴 '캡처' 칸에서 열린다. 썸네일을 누르면 다시 미리보기(클립보드에도 복사),
+/// 아래 버튼으로 새로 찍기. 포커스를 뺏지 않고, 바깥을 누르면 닫힌다.
+final class CaptureStrip {
+    static let shared = CaptureStrip()
+    private var panel: FloatingPanel?
+    private var monitor: Any?
+
+    func toggle(near body: CGRect, in v: CGRect) {
+        if panel != nil { close(); return }
+        let shots = Capture.shared.todayShots()
+        let thumb = CGSize(width: 96, height: 64), gap: CGFloat = 10
+        let count = max(1, min(shots.count, 5))
+        let w = max(320, CGFloat(count) * (thumb.width + gap) - gap + 32), h: CGFloat = 46 + thumb.height + 54
+        let p = FloatingPanel(size: CGSize(width: w, height: h))
+        p.appearance = NSAppearance(named: .darkAqua)
+        var x = body.midX - w / 2, y = body.minY - h - 8
+        if y < v.minY + 8 { y = body.maxY + 8 }
+        x = min(max(x, v.minX + 8), v.maxX - w - 8)
+        p.setFrame(CGRect(x: x, y: min(y, v.maxY - h - 8), width: w, height: h), display: false)
+        let root = NSView(frame: CGRect(origin: .zero, size: p.frame.size))
+        let glass = makeGlass(cornerRadius: 18, frame: root.bounds)
+        root.addSubview(glass)
+        let title = NSTextField(labelWithString: shots.isEmpty ? "오늘 찍은 캡처가 없어요" : "오늘 찍은 캡처 \(shots.count)장")
+        title.font = .systemFont(ofSize: 13, weight: .bold); title.textColor = .white
+        title.frame = CGRect(x: 16, y: h - 32, width: w - 32, height: 18)
+        root.addSubview(title)
+        let tf = DateFormatter(); tf.dateFormat = "H:mm"
+        for (i, shot) in shots.prefix(5).enumerated() {
+            let b = ClosureButton("") { [weak self] in Capture.shared.reopen(shot.png); self?.close() }
+            b.isBordered = false; b.imageScaling = .scaleProportionallyUpOrDown
+            b.image = NSImage(data: shot.png)
+            b.wantsLayer = true; b.layer?.cornerRadius = 8; b.layer?.masksToBounds = true
+            b.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
+            b.toolTip = tf.string(from: shot.date) + " · 누르면 다시 열고 복사해요"
+            b.frame = CGRect(x: 16 + CGFloat(i) * (thumb.width + gap), y: 54, width: thumb.width, height: thumb.height)
+            root.addSubview(b)
+        }
+        if shots.isEmpty {
+            let note = NSTextField(labelWithString: "아래에서 바로 찍어 보세요.")
+            note.font = .systemFont(ofSize: 12); note.textColor = .white.withAlphaComponent(0.6)
+            note.frame = CGRect(x: 16, y: 54 + thumb.height / 2 - 8, width: w - 32, height: 16)
+            root.addSubview(note)
+        }
+        let modes: [(String, CaptureMode)] = [("영역", .area), ("창", .window), ("전체", .full)]
+        let bw = (w - 32 - 16) / 3
+        for (i, m) in modes.enumerated() {
+            let b = PillButton("\(m.0) 찍기", primary: i == 0) { [weak self] in self?.close(); Capture.shared.take(m.1) }
+            b.frame = CGRect(x: 16 + CGFloat(i) * (bw + 8), y: 12, width: bw, height: 30)
+            root.addSubview(b)
+        }
+        p.contentView = root
+        p.orderFrontRegardless()
+        panel = p
+        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.close() }
+    }
+
+    func close() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        panel?.orderOut(nil); panel = nil
     }
 }

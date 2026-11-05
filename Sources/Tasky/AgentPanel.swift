@@ -12,7 +12,7 @@ extension AgentSession.State {
     var label: String {
         switch self {
         case .working: "일하는 중"
-        case .waiting: "기다려요 (터미널에서 답해 주세요)"
+        case .waiting: "허락을 기다려요 (터미널에서 답해 주세요)"
         case .done: "끝났어요"
         case .failed: "실패했어요"
         }
@@ -99,12 +99,16 @@ final class AgentListController: NSObject {
         if sessions.isEmpty {
             let empty = NSTextField(wrappingLabelWithString: anyConnected
                 ? "아직 받은 작업이 없어요. 터미널에서 Claude Code나 Codex에 일을 맡기면 여기에 보여요."
-                : "아래에서 Claude Code나 Codex를 연결하면, 작업이 끝나거나 나를 기다릴 때 펫이 알려 줘요.")
+                : "아래에서 Claude Code나 Codex를 연결하면, 내 허락이 필요할 때 펫이 알려 주고 작업 상태는 여기서 볼 수 있어요.")
             empty.textColor = .secondaryLabelColor
             empty.preferredMaxLayoutWidth = size.width - 28
             stack.addArrangedSubview(empty)
         }
-        for s in sessions { stack.addArrangedSubview(row(s)) }
+        // F27 7번 A: 세션 카드 스택(허락 기다림 > 실패 > 하는 중 > 끝남)
+        let rank: [AgentSession.State: Int] = [.waiting: 0, .failed: 1, .working: 2, .done: 3]
+        for s in sessions.enumerated().sorted(by: { (rank[$0.element.state]!, $0.offset) < (rank[$1.element.state]!, $1.offset) }).map(\.element) {
+            stack.addArrangedSubview(card(row(s), color: s.state.color))
+        }
         let height = max(stack.fittingSize.height, size.height - 44)
         stack.frame = CGRect(x: 0, y: 0, width: size.width - 16, height: height)
         stack.superview?.frame.size = CGSize(width: size.width - 16, height: height)
@@ -125,12 +129,20 @@ final class AgentListController: NSObject {
         head.spacing = 8
         var views: [NSView] = [head, status]
 
+        if s.state == .waiting, let ask = s.ask {
+            let text = NSTextField(wrappingLabelWithString: "허락할 것: " + ask)
+            text.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+            text.maximumNumberOfLines = 2
+            text.preferredMaxLayoutWidth = size.width - 56
+            text.isSelectable = false
+            views.append(text)
+        }
         if let summary = s.summary, !summary.isEmpty {
             // 에이전트가 쓴 글은 평문으로만 보여준다(링크·동작 없음)
             let text = NSTextField(wrappingLabelWithString: summary)
             text.font = .systemFont(ofSize: 12)
             text.maximumNumberOfLines = 3
-            text.preferredMaxLayoutWidth = size.width - 40
+            text.preferredMaxLayoutWidth = size.width - 56
             text.isSelectable = false
             views.append(text)
         }
@@ -156,6 +168,32 @@ final class AgentListController: NSObject {
         v.alignment = .leading
         v.spacing = 4
         return v
+    }
+
+    /// 카드: 둥근 바탕 + 왼쪽 상태 색 띠
+    private func card(_ content: NSView, color: NSColor) -> NSView {
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 12
+        box.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        box.layer?.borderWidth = 1
+        box.layer?.borderColor = color.withAlphaComponent(0.35).cgColor
+        let stripe = NSView(); stripe.wantsLayer = true
+        stripe.layer?.backgroundColor = color.cgColor; stripe.layer?.cornerRadius = 2
+        [stripe, content].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; box.addSubview($0) }
+        box.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            box.widthAnchor.constraint(equalToConstant: size.width - 44),
+            stripe.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 6),
+            stripe.topAnchor.constraint(equalTo: box.topAnchor, constant: 10),
+            stripe.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -10),
+            stripe.widthAnchor.constraint(equalToConstant: 4),
+            content.leadingAnchor.constraint(equalTo: stripe.trailingAnchor, constant: 10),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: box.trailingAnchor, constant: -10),
+            content.topAnchor.constraint(equalTo: box.topAnchor, constant: 10),
+            content.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -10),
+        ])
+        return box
     }
 
     private var bottomBar: NSView?

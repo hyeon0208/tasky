@@ -200,6 +200,7 @@ final class SnapController {
     }
 
     private var permissionTimer: Timer?
+    private static var askedThisRun = false
     private var monitors: [Any] = []
     private var preview: FloatingPanel?
     private var saved: [CFHashCode: (original: CGRect, last: CGRect)] = [:]   // 창 → 맞추기 전·마지막으로 맞춘 자리(AX 좌표, 메모리만)
@@ -218,6 +219,11 @@ final class SnapController {
         stop()
         guard Self.enabled else { onChange(); return }
         guard AXIsProcessTrusted() else {
+            // 켜 둔 채인데 권한이 없으면(초기화·서명 변경 뒤) 실행마다 한 번 시스템 안내를 띄운다
+            if !Self.askedThisRun {
+                Self.askedThisRun = true
+                AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+            }
             permissionTimer = Ticker.every("창 정리 권한 생겼는지 보기", 2) { [weak self] _ in
                 if AXIsProcessTrusted() { self?.start() }
             }
@@ -237,8 +243,71 @@ final class SnapController {
             } ? .ok : .taken
         }
         if Self.dragOn { watchDrags() }
+        // F27 12번 C: ⌃⌥를 잠깐 누르고 있으면 단축키 도움말(손쉬운 사용 권한 안에서, 키는 저장하지 않음)
+        let flags: (NSEvent) -> Void = { [weak self] e in self?.modifiersChanged(e.modifierFlags) }
+        monitors += [NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flags),
+                     NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { e in flags(e); return e }].compactMap { $0 }
         onChange()
     }
+
+    // MARK: 단축키 도움말 (F27)
+
+    private var helpWork: DispatchWorkItem?
+    private var help: FloatingPanel?
+
+    /// ⌃⌥만 눌렀을 때 0.6초 지나면 보인다. 떼거나 ⌘·⇧를 더하면 닫는다(마우스는 통과)
+    static func isHelpChord(_ f: NSEvent.ModifierFlags) -> Bool {
+        f.intersection([.control, .option, .command, .shift]) == [.control, .option]
+    }
+
+    private func modifiersChanged(_ f: NSEvent.ModifierFlags) {
+        helpWork?.cancel()
+        guard Self.isHelpChord(f) else { hideHelp(); return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, Self.isHelpChord(NSEvent.modifierFlags) else { return }
+            self.showHelp()
+        }
+        helpWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func showHelp() {
+        guard help == nil else { return }
+        let rows = SnapAction.allCases.compactMap { a -> (String, String)? in
+            guard status[a] == .ok, let k = a.key else { return nil }
+            return (a.title, HotKey.title(keyCode: k.code, modifiers: k.mods))
+        }
+        guard !rows.isEmpty else { return }
+        let colW: CGFloat = 220, rowH: CGFloat = 22
+        let perCol = Int(ceil(Double(rows.count) / 2))
+        let w = colW * 2 + 32, h = CGFloat(perCol) * rowH + 54
+        let p = FloatingPanel(size: CGSize(width: w, height: h))
+        p.ignoresMouseEvents = true
+        p.appearance = NSAppearance(named: .darkAqua)
+        let v = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+        p.setFrame(CGRect(x: v.midX - w / 2, y: v.midY - h / 2, width: w, height: h), display: false)
+        let root = NSView(frame: CGRect(origin: .zero, size: p.frame.size))
+        root.addSubview(makeGlass(cornerRadius: 18, frame: root.bounds))
+        let title = NSTextField(labelWithString: "창 정리 단축키")
+        title.font = .boldSystemFont(ofSize: 14); title.textColor = .white
+        title.frame = CGRect(x: 16, y: h - 32, width: w - 32, height: 18)
+        root.addSubview(title)
+        for (i, r) in rows.enumerated() {
+            let x = 16 + CGFloat(i / perCol) * colW, y = h - 56 - CGFloat(i % perCol) * rowH
+            let k = NSTextField(labelWithString: r.1)
+            k.font = .monospacedSystemFont(ofSize: 12, weight: .semibold); k.textColor = .white.withAlphaComponent(0.85)
+            k.frame = CGRect(x: x, y: y, width: 74, height: 16)
+            let t = NSTextField(labelWithString: r.0)
+            t.font = .systemFont(ofSize: 12); t.textColor = .white
+            t.frame = CGRect(x: x + 78, y: y, width: colW - 86, height: 16)
+            root.addSubview(k); root.addSubview(t)
+        }
+        p.contentView = root
+        p.orderFrontRegardless()
+        help = p
+    }
+
+    private func hideHelp() { help?.orderOut(nil); help = nil }
 
     func stop() {
         permissionTimer?.invalidate()
@@ -248,6 +317,8 @@ final class SnapController {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
         hidePreview()
+        helpWork?.cancel()
+        hideHelp()
     }
 
     // MARK: 맞추기

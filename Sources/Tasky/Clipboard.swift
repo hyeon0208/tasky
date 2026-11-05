@@ -328,6 +328,10 @@ final class ClipWindow: NSObject, NSSearchFieldDelegate, NSTableViewDataSource, 
     private var previousApp: NSRunningApplication?
     private var monitors: [Any] = []
     private static let width: CGFloat = 440, rowHeight: CGFloat = 40, maxRows = 9
+    /// F27 11번 C: 고정한 항목은 검색칸 아래 칩 줄로
+    private let pinBar = NSStackView()
+    private var scroll: NSScrollView?
+    private static let pinBarHeight: CGFloat = 34
 
     var isOpen: Bool { panel != nil }
 
@@ -352,13 +356,17 @@ final class ClipWindow: NSObject, NSSearchFieldDelegate, NSTableViewDataSource, 
         effect.layer?.masksToBounds = true
 
         search.frame = CGRect(x: 12, y: height - 44, width: Self.width - 24, height: 32)
-        search.placeholderString = "복사한 것 검색 · ↩ 고르기 · ⌘P 고정 · ⌫ 지우기"
+        search.placeholderString = "복사한 것 검색 · ↩ 고르기 · 📌·⌘P 고정 · ⌫ 지우기"
         search.font = .systemFont(ofSize: 15)
         search.delegate = self
         search.stringValue = ""
         effect.addSubview(search)
 
+        pinBar.frame = CGRect(x: 12, y: height - 48 - Self.pinBarHeight + 4, width: Self.width - 24, height: 26)
+        pinBar.orientation = .horizontal; pinBar.spacing = 6
+        effect.addSubview(pinBar)
         let scroll = NSScrollView(frame: CGRect(x: 6, y: 6, width: Self.width - 12, height: height - 58))
+        self.scroll = scroll
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         table.headerView = nil
@@ -401,16 +409,47 @@ final class ClipWindow: NSObject, NSSearchFieldDelegate, NSTableViewDataSource, 
         previousApp = nil
     }
 
+    /// 목록: 고정 먼저(검색 결과 순서 그대로)
+    static func listed(_ all: [ClipItem], query: String) -> [ClipItem] {
+        all   // 고정 항목도 목록 맨 위에 둔다(↩·⌘1~9로 고를 수 있게). 칩 줄은 빠른 손길용
+    }
+
     private func reload() {
         let selected = table.selectedRow
-        shown = ClipStore.shared.history.search(search.stringValue)
-        table.reloadData()
+        refreshList()
         if !shown.isEmpty { table.selectRowIndexes([min(max(selected, 0), shown.count - 1)], byExtendingSelection: false) }
     }
 
-    func controlTextDidChange(_ obj: Notification) {
-        shown = ClipStore.shared.history.search(search.stringValue)
+    private func refreshList() {
+        let h = ClipStore.shared.history
+        shown = Self.listed(h.search(search.stringValue), query: search.stringValue)
         table.reloadData()
+        let pins = h.items.filter(\.pinned)
+        pinBar.setViews(pins.prefix(6).map { item in
+            let b = ClosureButton(" 📌 " + String(item.preview.prefix(14)) + " ") { [weak self] in
+                ClipWatcher.shared.put(item); self?.close(restore: true)
+            }
+            b.isBordered = false; b.wantsLayer = true
+            b.layer?.cornerRadius = 12; b.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor
+            b.font = .systemFont(ofSize: 12, weight: .semibold)
+            b.toolTip = String(item.preview.prefix(200)) + "\n오른쪽 클릭: 고정 빼기"
+            let m = NSMenu(); m.addItem(ClosureMenuItem("고정 빼기") { Self.togglePin(item.id) }); b.menu = m
+            b.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            return b
+        }, in: .leading)
+        // 고정이 있으면 칩 줄 자리만큼 목록을 내린다
+        guard let scroll, let content = scroll.superview else { return }
+        let top = content.bounds.height - 52 - (pins.isEmpty ? 0 : Self.pinBarHeight)
+        pinBar.isHidden = pins.isEmpty
+        scroll.frame = CGRect(x: 6, y: 6, width: Self.width - 12, height: top - 6 + 6)
+    }
+
+    static func togglePin(_ id: UUID) {
+        ClipStore.shared.update { h in if let i = h.items.firstIndex(where: { $0.id == id }) { h.items[i].pinned.toggle() } }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        refreshList()
         if !shown.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) }
     }
 
@@ -435,8 +474,7 @@ final class ClipWindow: NSObject, NSSearchFieldDelegate, NSTableViewDataSource, 
         if e.modifierFlags.contains(.command) {
             // 키 코드로 본다(한글 자판에서도 ⌘P·⌘1~9가 되게)
             if Int(e.keyCode) == kVK_ANSI_P, shown.indices.contains(row) {
-                let id = shown[row].id
-                ClipStore.shared.update { h in if let i = h.items.firstIndex(where: { $0.id == id }) { h.items[i].pinned.toggle() } }
+                Self.togglePin(shown[row].id)
                 return true
             }
             let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
@@ -452,7 +490,11 @@ final class ClipWindow: NSObject, NSSearchFieldDelegate, NSTableViewDataSource, 
         table.scrollRowToVisible(i)
     }
 
-    @objc private func clicked() { pick(table.clickedRow) }
+    @objc private func clicked() {
+        // 고정 버튼 자리를 누른 것은 고르기가 아니다
+        if let e = NSApp.currentEvent, table.convert(e.locationInWindow, from: nil).x > table.bounds.width - 40 { return }
+        pick(table.clickedRow)
+    }
 
     private func pick(_ i: Int) {
         guard shown.indices.contains(i) else { return }
@@ -492,12 +534,20 @@ final class ClipWindow: NSObject, NSSearchFieldDelegate, NSTableViewDataSource, 
         text.font = .systemFont(ofSize: 13)
         text.frame = CGRect(x: 40, y: 11, width: Self.width - 30 - 40 - 70, height: 18)
         cell.addSubview(text)
-        let when = NSTextField(labelWithString: (item.pinned ? "📌 " : "") + Self.relative.localizedString(for: item.date, relativeTo: Date()))
+        let when = NSTextField(labelWithString: Self.relative.localizedString(for: item.date, relativeTo: Date()))
         when.font = .systemFont(ofSize: 11)
         when.textColor = .secondaryLabelColor
         when.alignment = .right
-        when.frame = CGRect(x: Self.width - 30 - 72, y: 12, width: 66, height: 16)
+        when.frame = CGRect(x: Self.width - 30 - 96, y: 12, width: 62, height: 16)
         cell.addSubview(when)
+        // F27 11번: 항목마다 고정 버튼(누르면 고정·빼기)
+        let id = item.id
+        let pin = ClosureButton("") { Self.togglePin(id) }
+        pin.image = NSImage(systemSymbolName: item.pinned ? "pin.fill" : "pin", accessibilityDescription: item.pinned ? "고정 빼기" : "고정")
+        pin.isBordered = false; pin.contentTintColor = item.pinned ? .controlAccentColor : .tertiaryLabelColor
+        pin.toolTip = item.pinned ? "고정 빼기" : "고정"
+        pin.frame = CGRect(x: Self.width - 30 - 30, y: 9, width: 24, height: 22)
+        cell.addSubview(pin)
         return cell
     }
 }

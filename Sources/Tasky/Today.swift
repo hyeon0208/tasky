@@ -10,6 +10,8 @@ struct Glance: Equatable {
     var clock = ""
     /// "2:00 치과" (오늘 남은 시간 있는 일정 중 가장 가까운 것)
     var next = ""
+    /// F28: 오늘 남은 일정 중 `next` 다음 것 개수(받침대 '외 N')
+    var moreEvents = 0
     var dots: [AgentSession.State] = []
     var isEmpty: Bool { !showsTasks && next.isEmpty }   // 작업 상태는 칩이 아니라 곰의 유리 배지로(F26 5차)
     /// F26 H2: 0개면 ✓ 칩을 숨긴다(볼 게 없는 칩이 원형 메뉴 칸을 덮지 않게)
@@ -24,10 +26,13 @@ struct Glance: Equatable {
         let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!
         let from = now.addingTimeInterval(-300)
         var best: TaskItem?
+        var count = 0
         for i in items where i.isEvent && i.hasTime {
             guard let d = i.date, d >= from, d < end else { continue }
+            count += 1
             if best == nil || d < best!.date! { best = i }
         }
+        g.moreEvents = max(0, count - 1)
         if let e = best, let d = e.date {
             let f = DateFormatter(); f.calendar = calendar; f.timeZone = calendar.timeZone; f.dateFormat = "h:mm"
             g.next = "\(f.string(from: d)) \(e.title)"
@@ -187,22 +192,67 @@ private final class GlassFace: NSView {
     }
 }
 
-/// 꺼내 둔 곰 머리 위 칩(마우스 통과). 큰 작업 구슬(F14)을 대신한다.
-final class GlanceChipsView: NSView {
-    var glance = Glance() { didSet { needsDisplay = true } }
-    override func draw(_ dirtyRect: NSRect) {
-        let w = GlanceChips.width(glance) + 12
-        let r = CGRect(x: (bounds.width - w) / 2, y: 1, width: w, height: GlanceChips.height + 8)
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        (dark ? NSColor(white: 0.12, alpha: 0.92) : NSColor(white: 1, alpha: 0.95)).setFill()
-        let pill = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
-        NSGraphicsContext.current?.saveGraphicsState()
-        let sh = NSShadow(); sh.shadowColor = NSColor(white: 0, alpha: 0.18); sh.shadowBlurRadius = 6; sh.shadowOffset = CGSize(width: 0, height: -2); sh.set()
-        pill.fill()
-        NSGraphicsContext.current?.restoreGraphicsState()
-        GlanceChips.draw(glance, at: CGPoint(x: r.minX + 6, y: r.minY + 4), dark: dark)
+/// F27 받침대: 곰 발밑 유리 판. 시계(크게) · 할 일 수/다음 일정(작은 두 줄) · 오른쪽 끝 상태 구슬.
+/// 구슬만 누를 수 있고, 커서가 받침대에서 나가면 `onExit`로 알린다(갖다대면 모드에서 숨기기).
+final class StandView: NSView {
+    static let height: CGFloat = 40   // F28 11차 B: 컴팩트 한 줄
+    let orb = AgentBadgeView(frame: .zero)
+    var onExit: () -> Void = {}
+    var onEnter: () -> Void = {}
+    var clock = "" { didSet { if clock != oldValue { clockLabel.stringValue = clock; invalidateIntrinsicContentSize() } } }
+    var glance = Glance() { didSet { if glance != oldValue { refresh() } } }
+    private let glass = makeGlass(cornerRadius: StandView.height / 2, frame: .zero)
+    private let clockLabel = NSTextField(labelWithString: "")
+    private let taskLabel = NSTextField(labelWithString: "")
+    private let nextLabel = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        appearance = NSAppearance(named: .darkAqua)
+        addSubview(glass)
+        clockLabel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .heavy); clockLabel.textColor = .white
+        taskLabel.font = .systemFont(ofSize: 11, weight: .semibold); taskLabel.textColor = NSColor(red: 0.54, green: 0.71, blue: 1, alpha: 1)
+        nextLabel.font = .systemFont(ofSize: 12, weight: .semibold); nextLabel.textColor = NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1)
+        for l in [taskLabel, nextLabel] { l.lineBreakMode = .byTruncatingTail }
+        [clockLabel, taskLabel, nextLabel, orb].forEach(addSubview)
+        orb.wantsLayer = true
     }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func width(_ l: NSTextField) -> CGFloat { ceil((l.stringValue as NSString).size(withAttributes: [.font: l.font!]).width) + 6 }
+    private func part(_ l: NSTextField) -> CGFloat { l.stringValue.isEmpty ? 0 : min(170, width(l)) + 10 }
+    override var fittingSize: NSSize {
+        NSSize(width: 14 + width(clockLabel) + part(taskLabel) + part(nextLabel) + (orb.state == nil ? 10 : 36), height: Self.height)
+    }
+
+    private func refresh() {
+        // 한 줄: 시계 · 할 일 N · 다음 일정(외 N)
+        taskLabel.stringValue = glance.showsTasks ? "할 일 \(glance.tasks)" : ""
+        nextLabel.stringValue = glance.next.isEmpty ? (glance.tasksOn && !glance.showsTasks ? "오늘 일정 없음" : "") : glance.next + (glance.moreEvents > 0 ? " 외 \(glance.moreEvents)" : "")
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        glass.frame = bounds
+        let c = CGSize(width: width(clockLabel), height: clockLabel.intrinsicContentSize.height)
+        clockLabel.frame = CGRect(x: 14, y: (bounds.height - c.height) / 2, width: c.width, height: c.height)
+        var x = clockLabel.frame.maxX + 10
+        for l in [taskLabel, nextLabel] where !l.stringValue.isEmpty {
+            l.frame = CGRect(x: x, y: (bounds.height - 16) / 2, width: min(170, width(l)), height: 16)
+            x += part(l)
+        }
+        orb.frame = CGRect(x: bounds.maxX - 34, y: (bounds.height - 28) / 2 - 2, width: 28, height: 28)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { orb.hitTest(point) ?? (bounds.contains(convert(point, from: superview)) ? self : nil) }
+    override func mouseEntered(with event: NSEvent) { onEnter() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+    }
+    override func mouseExited(with event: NSEvent) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.onExit() } }
 }
 
 /// 오늘 카드: 곰을 한 번 누르면 옆에 뜬다. 할 일·입력·다음 일정. (작업 알림은 원형 메뉴 '작업 목록'에서)
@@ -224,14 +274,21 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
     var isOpen: Bool { panel != nil }
     private static let width: CGFloat = 360
 
-    func toggle(near anchor: @escaping () -> CGRect, in v: CGRect, below: Bool, parent: NSWindow?) {
-        isOpen ? close() : open(near: anchor, in: v, below: below, parent: parent)
+    func toggle(near anchor: @escaping () -> CGRect, in v: CGRect, below: Bool, parent: NSWindow?, growFrom: CGRect? = nil) {
+        isOpen ? close() : open(near: anchor, in: v, below: below, parent: parent, growFrom: growFrom)
     }
+    /// F27 10차 A+F: 받침대 자리에서 자라나 열린다(받침대 윗변에 붙은 채 아래로). 닫히면 알린다
+    private var growFrom: CGRect?
+    private var growTop: CGRect?
+    var onClose: () -> Void = {}
 
-    func open(near anchor: @escaping () -> CGRect, in v: CGRect, below: Bool, parent: NSWindow?) {
+    func open(near anchor: @escaping () -> CGRect, in v: CGRect, below: Bool, parent: NSWindow?, growFrom: CGRect? = nil) {
         close()
+        self.growFrom = growFrom
+        growTop = growFrom
         self.anchor = anchor; visible = v; self.below = below; problem = nil
         let p = FloatingPanel(size: CGSize(width: Self.width, height: 200))
+        p.appearance = NSAppearance(named: .darkAqua)   // F27: 시안의 어두운 유리
         p.keyable = true   // 입력칸을 누르면 바로 칠 수 있게(앱을 앞으로 가져오지는 않음)
         panel = p
         rebuild()
@@ -249,6 +306,8 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
     }
 
     func close() {
+        defer { if panel == nil, closing { closing = false; onClose(); onClose = {} } }
+        closing = panel != nil
         monitors.forEach(NSEvent.removeMonitor); monitors = []
         NotificationCenter.default.removeObserver(self, name: TaskStore.changedNote, object: nil)
         panel?.orderOut(nil); panel = nil
@@ -275,43 +334,81 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
         return s
     }
 
+    /// F27: AI 작업 덩어리 줄(이름·상태 글·색). 여는 쪽(펫)이 정한다
+    var agentRows: () -> [(String, String, NSColor)] = { [] }
+    var showsAgents = true
+    var onOpenAgents: () -> Void = {}
+
+    /// 색 제목 + 줄들을 담은 덩어리(F27 4번 B)
+    private func block(_ title: String, _ color: NSColor, _ rows: [NSView], onClick: (() -> Void)? = nil) -> NSView {
+        let head = label(title, size: 12, weight: .bold, color: color)
+        let b = box([head] + rows, spacing: 6)
+        if let onClick {
+            let click = NSClickGestureRecognizer(target: ClickTarget.shared, action: #selector(ClickTarget.fire(_:)))
+            ClickTarget.shared.actions[ObjectIdentifier(click)] = onClick
+            b.addGestureRecognizer(click)
+        }
+        return b
+    }
+
     /// 입력칸은 창이 열려 있는 동안 그대로 두고, 위·아래 줄만 바꾼다(입력 중 contentView를 다시 만들면 포커스·한글 조합이 끊긴다).
     private func rebuild() {
         guard let p = panel else { return }
+        ClickTarget.shared.actions = [:]   // 다시 그릴 때마다 지난 덩어리 클릭은 비운다
         let now = Date()
         let store = TaskStore.shared
         let pending = TaskLogic.pending(store.items, now: now)
         var top: [NSView] = [], bottom: [NSView] = []
 
         let f = DateFormatter(); f.locale = Locale(identifier: "ko_KR"); f.dateFormat = "M월 d일 EEEE"
-        top.append(label(f.string(from: now), size: 12, color: .secondaryLabelColor))
-        let title = !TaskStore.anyOn ? "오늘도 반가워요" : pending.isEmpty ? "오늘 할 일을 다 했어요" : "할 일 \(pending.count)개 남았어요"
-        top.append(label(title, size: 19, weight: .bold))
+        top.append(label("오늘 · " + f.string(from: now), size: 15, weight: .bold))
 
         if TaskStore.anyOn {
-            if !pending.isEmpty {
-                let checks: [NSView] = pending.prefix(5).map { item in
-                    let b = ClosureButton(item.title) { TaskStore.shared.complete(item) }
-                    b.setButtonType(.switch)
-                    b.font = .systemFont(ofSize: 14)
-                    return b
-                }
-                var list = checks
-                if pending.count > 5 { list.append(label("외 \(pending.count - 5)개", size: 12, color: .secondaryLabelColor)) }
-                top.append(box(list, spacing: 4))
+            // 할 일
+            var todos: [NSView] = pending.prefix(4).map { item in
+                let b = ClosureButton(item.title) { TaskStore.shared.complete(item) }
+                b.setButtonType(.switch)
+                b.font = .systemFont(ofSize: 13)
+                return b
             }
-            if let problem { let l = label(problem, size: 12, color: .systemRed); l.lineBreakMode = .byWordWrapping; l.preferredMaxLayoutWidth = Self.width - 28; bottom.append(l) }
-            if let e = store.items.filter({ $0.isEvent && $0.hasTime && ($0.date ?? .distantPast) >= now }).min(by: { $0.date! < $1.date! }),
-               let d = e.date, Calendar.current.isDateInToday(d) {
+            if pending.count > 4 { todos.append(label("외 \(pending.count - 4)개", size: 11, color: .secondaryLabelColor)) }
+            if todos.isEmpty { todos = [label(TaskStore.remindersOn ? "남은 할 일이 없어요" : "설정에서 미리 알림을 켜면 보여요", size: 12, color: .secondaryLabelColor)] }
+            top.append(block(pending.isEmpty ? "할 일" : "할 일 \(pending.count)", NSColor(red: 0.54, green: 0.71, blue: 1, alpha: 1), todos))
+            // 일정(설정한 기간까지)
+            let events = TaskLogic.upcomingEvents(store.items, now: now, days: TaskStore.eventDays)
+            var evRows: [NSView] = events.prefix(4).map { e in
+                let d = e.date ?? now
                 let mins = Int(d.timeIntervalSince(now) / 60)
-                let when = mins < 60 ? "\(mins)분 뒤" : TaskWindow.timeText(d, hasTime: true)
-                bottom.append(box([label("다음 일정", size: 11, weight: .semibold, color: .systemBlue), label(e.title, size: 14, weight: .semibold),
-                                   label(TaskWindow.timeText(d, hasTime: true) + " · " + when, size: 12, color: .secondaryLabelColor)]))
+                let when = mins >= 0 && mins < 60 ? " · \(mins)분 뒤" : ""
+                let l = label(TaskWindow.timeText(d, hasTime: e.hasTime) + "  " + e.title + when, size: 13, weight: .semibold)
+                // F28: 일정을 누르면 그 자리에서 고치기(이름·날짜·시간). 바꿀 수 없는 캘린더(공휴일 등)는 안내만
+                let row = ClickRow(views: [l])
+                row.toolTip = e.ref?.calendar.allowsContentModifications == true ? "눌러서 고치기" : "이 캘린더는 고칠 수 없어요"
+                row.onClick = { [weak row] in
+                    guard let row, e.ref?.calendar.allowsContentModifications == true else { NSSound.beep(); return }
+                    TaskWindow.shared.edit(e, from: row)
+                }
+                return row
             }
+            if events.count > 4 { evRows.append(label("외 \(events.count - 4)개", size: 11, color: .secondaryLabelColor)) }
+            if evRows.isEmpty { evRows = [label(TaskStore.eventsOn ? "\(TaskStore.eventDays)일 안에 일정이 없어요" : "설정에서 캘린더를 켜면 보여요", size: 12, color: .secondaryLabelColor)] }
+            top.append(block(TaskStore.eventDays == 1 ? "일정 · 오늘" : "일정 · \(TaskStore.eventDays)일", NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1), evRows))
+            if let problem { let l = label(problem, size: 12, color: .systemRed); l.lineBreakMode = .byWordWrapping; l.preferredMaxLayoutWidth = Self.width - 28; bottom.append(l) }
         } else {
             top.append(box([label("할 일·일정을 켜면 여기에 보여요", size: 13, color: .secondaryLabelColor),
                             ClosureButton("설정 열기") { [weak self] in self?.close(); self?.onOpenSettings() }]))
         }
+        // AI 작업
+        let agents = showsAgents ? agentRows() : []
+        var agRows: [NSView] = agents.prefix(3).map { a in
+            let dot = NSTextField(labelWithString: "●"); dot.font = .systemFont(ofSize: 10); dot.textColor = a.2
+            let row = NSStackView(views: [dot, label(a.0, size: 13, weight: .semibold), label(a.1, size: 12, color: .secondaryLabelColor)])
+            row.spacing = 6
+            return row
+        }
+        if agRows.isEmpty { agRows = [label("진행 중인 작업이 없어요", size: 12, color: .secondaryLabelColor)] }
+        if showsAgents { top.append(block("AI 작업", NSColor(red: 0.53, green: 0.94, blue: 0.67, alpha: 1), agRows) { [weak self] in self?.close(); self?.onOpenAgents() }) }
+
         input.isHidden = !TaskStore.anyOn
         if !footer.isEmpty {
             let buttons: [NSView] = footer.map { f in
@@ -328,7 +425,16 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
         bottomStack.setViews(bottom, in: .leading)
         bottomStack.isHidden = bottom.isEmpty
         let size = CGSize(width: Self.width, height: stack.fittingSize.height)
-        p.setFrame(place(size), display: true)
+        let target = place(size)
+        if let g = growFrom, !p.isVisible || p.frame.size == CGSize(width: Self.width, height: 200) {
+            // 처음 열 때만: 받침대 크기에서 시작해 카드로 늘어난다
+            growFrom = nil
+            p.setFrame(g, display: true)
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { p.setFrame(target, display: true) }
+            else { NSAnimationContext.runAnimationGroup { $0.duration = 0.25; $0.timingFunction = CAMediaTimingFunction(name: .easeOut); p.animator().setFrame(target, display: true) } }
+        } else {
+            p.setFrame(target, display: true)
+        }
     }
 
     private let root = NSView()
@@ -343,7 +449,7 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
         root.layer?.masksToBounds = true
         for s in [topStack, bottomStack] { s.orientation = .vertical; s.alignment = .leading; s.spacing = 10 }
         if input.target == nil {
-            input.placeholderString = "내일 3시 치과처럼 적고 ↩"
+            input.placeholderString = "할 일 또는 일정 추가"
             input.font = .systemFont(ofSize: 14)
             input.bezelStyle = .roundedBezel
             input.delegate = self
@@ -365,7 +471,16 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
     }
 
     /// 펫 옆(화면 안쪽 방향), 화면 밖으로 나가지 않게
+    private var closing = false
+
     private func place(_ size: CGSize) -> CGRect {
+        if let g = growTop {   // 받침대 윗변에 붙여 아래로(A+F)
+            let v = visible
+            let x = min(max(g.midX - size.width / 2, v.minX + 8), v.maxX - size.width - 8)
+            var y = g.maxY - size.height
+            if y < v.minY + 8 { y = v.minY + 8 }
+            return CGRect(origin: CGPoint(x: x, y: y), size: size)
+        }
         let near = anchor()
         let v = visible, shown = near.intersection(v).isNull ? near : near.intersection(v)
         if below {   // 몸 아래 가운데, 아래 자리가 모자라면 위로
@@ -393,4 +508,67 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
         rebuild()
         panel?.makeFirstResponder(input)
     }
+}
+
+/// 제스처 인식기용 클로저 대상(덩어리 누르기)
+final class ClickTarget: NSObject {
+    static let shared = ClickTarget()
+    var actions: [ObjectIdentifier: () -> Void] = [:]
+    @objc func fire(_ g: NSGestureRecognizer) { actions[ObjectIdentifier(g)]?() }
+}
+
+/// 누르면 동작하는 줄(손가락 커서)
+final class ClickRow: NSStackView {
+    var onClick: () -> Void = {}
+    override func mouseUp(with event: NSEvent) { if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick() } }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
+/// F28 11차 B: 받침대에 커서를 올리면 아래에 붙는 오늘 남은 일정 목록(누르면 고치기)
+final class StandEvents {
+    private(set) var panel: FloatingPanel?
+    func show(_ events: [TaskItem], below stand: CGRect, parent: NSWindow?, onLeave: @escaping () -> Void) {
+        hide()
+        guard !events.isEmpty else { return }
+        let rows = Array(events.prefix(4)), rowH: CGFloat = 30, w = max(200, stand.width)
+        let h = CGFloat(rows.count) * rowH + 12
+        let p = FloatingPanel(size: CGSize(width: w, height: h))
+        p.appearance = NSAppearance(named: .darkAqua)
+        p.setFrame(CGRect(x: stand.midX - w / 2, y: stand.minY - h - 4, width: w, height: h), display: false)
+        let root = TrackingView(frame: CGRect(origin: .zero, size: p.frame.size))
+        root.onExit = onLeave
+        root.addSubview(makeGlass(cornerRadius: 14, frame: root.bounds))
+        let f = DateFormatter(); f.dateFormat = "H:mm"
+        for (i, e) in rows.enumerated() {
+            let d = e.date ?? Date()
+            let mins = Int(d.timeIntervalSinceNow / 60)
+            let time = NSTextField(labelWithString: f.string(from: d))
+            time.font = .monospacedDigitSystemFont(ofSize: 12, weight: .bold); time.textColor = NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1)
+            let title = NSTextField(labelWithString: e.title + (mins >= 0 && mins < 60 ? " · \(mins)분 뒤" : ""))
+            title.font = .systemFont(ofSize: 12, weight: .semibold); title.textColor = .white; title.lineBreakMode = .byTruncatingTail
+            let row = ClickRow(views: [time, title]); row.spacing = 10
+            row.frame = CGRect(x: 14, y: h - 6 - CGFloat(i + 1) * rowH + 6, width: w - 28, height: 18)
+            row.toolTip = e.ref?.calendar.allowsContentModifications == true ? "눌러서 고치기" : "이 캘린더는 고칠 수 없어요"
+            row.onClick = { [weak row] in
+                guard let row, e.ref?.calendar.allowsContentModifications == true else { NSSound.beep(); return }
+                TaskWindow.shared.edit(e, from: row)
+            }
+            root.addSubview(row)
+        }
+        p.contentView = root
+        p.orderFrontRegardless()
+        parent?.addChildWindow(p, ordered: .above)
+        panel = p
+    }
+    func hide() { panel?.parent?.removeChildWindow(panel!); panel?.orderOut(nil); panel = nil }
+}
+
+final class TrackingView: NSView {
+    var onExit: () -> Void = {}
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+    }
+    override func mouseExited(with event: NSEvent) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.onExit() } }
 }

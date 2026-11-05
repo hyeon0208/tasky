@@ -21,9 +21,9 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     }
     /// 캐릭터 폴더 이름, "pod"는 콩깍지, "bear3d"는 3D 곰(기본, F18).
     private var characterName: String {
-        get { UserDefaults.standard.string(forKey: key("character")) ?? "bear3d" }
+        get { "bear3d" }   // F28: 캐릭터는 테디(3D 곰) 하나만(사용자 결정 2026-11-06)
         set {
-            UserDefaults.standard.set(newValue, forKey: key("character"))
+            UserDefaults.standard.removeObject(forKey: key("character"))
             applyCharacter()
             place(animated: false)
         }
@@ -74,7 +74,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private var origin: CGPoint = .zero      // 자유 상태 위치(붙었을 때는 가장자리를 따라가는 좌표로 씀)
     private var screenID: Int?
     private var hoverWork: DispatchWorkItem?
-    private var lastResults: [URL] = []
     /// 지금 진행 중인 변환 수(작업 구슬용)
     private var convertingCount = 0 { didSet { updateBeads() } }
 
@@ -97,7 +96,9 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             alertsMenu.addItem(item)
         }
         alertsItem.submenu = alertsMenu
-        menu.addItem(alertsItem)
+        // F27 피드백: 오른쪽 클릭 = 핵심 기능 메뉴(AI 작업 알림은 꺼 둠)
+        for (title, run) in coreMenuItems() { menu.addItem(title.isEmpty ? .separator() : ClosureMenuItem(title) { DispatchQueue.main.async(execute: run) }) }
+        if AgentFeature.enabled { menu.addItem(.separator()); menu.addItem(alertsItem) }
         petView.menu = menu
         restore(index: index)
         refreshAlertsMenu()
@@ -121,10 +122,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             self?.agentsChanged(nil, announce: false)   // 구슬 켜기·끄기도 같은 알림
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) {
-            [weak self] note in
+            [weak self] _ in
             self?.updateBeads()   // 맨 앞 앱이 바뀌면 큰 구슬이 바뀐다
-            // F26 D4: 다른 앱으로 넘어가는 순간 모아 둔 '끝남'을 한 번에
-            self?.flushDone(activated: (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier)
         }
         DispatchQueue.main.async { [weak self] in self?.updateClock() }
         lifeTimers = [
@@ -149,6 +148,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     }
 
     var isVisible: Bool { pet.isVisible }
+    var isDocked: Bool { dock.isDocked }
 
     // MARK: 위치
 
@@ -196,18 +196,15 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                                extra: max(shown.count - 3, 0), clock: ClockMode.text(Date(), seconds: false), border: alertBorder)
         i.glance = glance
         i.dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        guard let top = shown.first else {
-            let left = pendingTasks.count
-            i.line = left > 0 ? "할 일 \(left)" : "쉬는 중"
-            i.lineColor = left > 0 ? .systemOrange : .secondaryLabelColor
-            return i
-        }
-        i.lineColor = top.state.color
-        switch top.state {
-        case .waiting: i.line = "\(top.name) 내 차례"
-        case .failed: i.line = "\(top.name) 실패"
-        case .done: i.line = "\(top.name) 끝남"
-        case .working: i.line = "일하는 중 \(shown.count)개"
+        let tasks = pendingTasks
+        i.rows = Array((tasks.map(\.title) + (i.glance.next.isEmpty ? [] : [i.glance.next])).prefix(3))
+        // F27: '끝남' 같은 문구는 알약에 넣지 않는다. 허락 기다림만 한 줄로, 나머지는 할 일 요약
+        if let top = shown.first, top.state == .waiting {
+            i.line = "\(top.shortName) 허락을 기다려요"
+            i.lineColor = top.state.color
+        } else {
+            i.line = tasks.isEmpty ? "오늘 할 일을 다 했어요" : "할 일 \(tasks.count)개 남았어요"
+            i.lineColor = tasks.isEmpty ? .secondaryLabelColor : .systemOrange
         }
         return i
     }
@@ -300,7 +297,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     }
 
     func petHover(_ inside: Bool) {
-        if inside { touched() } else { seeAgents() }   // 올렸다 떼면 '봤다'(올린 동안은 구슬을 누를 수 있게 남김)
+        // 받침대 구슬로 커서를 옮기는 중이면 아직 '봤다'로 치지 않는다(구슬을 누를 수 있게)
+        if inside { touched() } else if !(stand?.panel.frame.contains(NSEvent.mouseLocation) ?? false) { seeAgents() }   // 올렸다 떼면 '봤다'(올린 동안은 구슬을 누를 수 있게 남김)
         scheduleHoverRing(inside)
         hovering = inside
         updateClock()
@@ -339,7 +337,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
-    private func togglePeek() {
+    func togglePeek() {
         if dock.isDocked {
             dock = .free
             let v = screen.visibleFrame
@@ -375,7 +373,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     // MARK: 귀환 브리핑 (F8)
 
-    private var briefing = Briefing()
+    private(set) var briefing = Briefing()
     /// 이 펫에서 끝난 변환(시각, 결과). 브리핑에 쓴다. 최근 50개.
     private var conversions: [(Date, [URL])] = []
     private var briefingWindow: BriefingWindow?
@@ -388,7 +386,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         if briefing.collect(sessions: sessions, conversions: conversions) > 0, pet.isVisible { petView.react(.briefing) }
     }
 
-    private func openBriefing() {
+    func openBriefing() {
         closeRing()
         guard briefingWindow == nil else { return }
         let shown = briefing.items
@@ -411,9 +409,9 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         agentList?.reload()
         if dock.isDocked, ring == nil, !hovering { place(animated: true) } else if let i = petView.island { petView.island = islandContent(expanded: i.expanded) }
         guard announce, let s, pet.isVisible || App.petsHidden, s.state != .working else { return }
-        // F26: 짧은 답·보고 있는 터미널의 '끝남'은 상태 점만 바꾸고 알리지 않는다
-        if s.state == .done, !DoneAlert.shouldAnnounce(elapsed: s.promptAt.map { s.updated.timeIntervalSince($0) }, minSeconds: DoneAlert.minSeconds,
-                                                       frontApp: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, sessionApp: s.app) { return }
+        petView.react(s.state == .waiting ? .jobWaiting : s.state == .failed ? .jobFailed : .jobDone)
+        // F27: 패널은 승인이 필요할 때만. 끝남·실패는 상태 구슬과 작업 목록에서 본다
+        guard AgentFeature.enabled, AgentAlert.showsPanel(s.state) else { return }
         if dock.isDocked, pet.isVisible {   // 알약: 상태 색 테두리 + 3초 펼침
             alertBorder = s.state.color
             alertOpen = true
@@ -426,37 +424,9 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 if !self.hovering, self.dock.isDocked, self.ring == nil, self.drawer == nil { self.place(animated: true) }
             }
         }
-        petView.react(s.state == .waiting ? .jobWaiting : s.state == .failed ? .jobFailed : .jobDone)
-        var title: String
-        var body = s.summary
-        switch s.state {
-        case .waiting:
-            title = "\(s.shortName) 작업이 내 답을 기다려요"
-            body = "터미널에서 승인하거나 답해 주세요."
-        case .failed:
-            title = "\(s.shortName) 작업이 실패했어요"
-        default:
-            // F26 D1+D4: 끝남은 창을 띄우지 않는다(곰 반응 + 머리 위 초록 점). 다른 앱으로 넘어갈 때 모아서 한 번
-            doneQueue.removeAll { $0.id == s.id }
-            doneQueue.append(s)
-            if s.whileOff { flushDone(activated: nil) }
-            return
-        }
+        var title = "\(s.shortName) 작업이 허락을 기다려요"
         if s.whileOff { title += " (펫이 꺼져 있던 동안)" }
-        presentAlert(s, title: title, body: body)
-    }
-
-    /// 모아 둔 '끝남'. 그 터미널로 넘어가면(직접 본 것) 빼고, 다른 앱으로 넘어가면 한 줄로 알린다
-    private var doneQueue: [AgentSession] = []
-    private func flushDone(activated: String?) {
-        doneQueue.removeAll { $0.app != nil && $0.app == activated }
-        // 그 사이 곰에서 봤거나 다시 시작된 작업은 빼고 알린다
-        let live = Dictionary((agents?.ordered ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        doneQueue.removeAll { live[$0.id].map { $0.state != .done || $0.seen } ?? true }
-        guard let last = doneQueue.last, pet.isVisible || App.petsHidden else { return }
-        let title = DoneAlert.summary(doneQueue.map(\.shortName))
-        doneQueue = []
-        presentAlert(last, title: title, body: nil)
+        presentAlert(s, title: title, body: s.ask ?? "터미널에서 승인하거나 답해 주세요.")
     }
 
     private func presentAlert(_ s: AgentSession, title: String, body: String?) {
@@ -507,47 +477,50 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     // MARK: 시계 말풍선 (시안 '커서 올리면 말풍선', 초 단위)
 
-    private var clock: (panel: FloatingPanel, label: NSTextField, timer: Timer)?
     private var hovering = false
 
+    // MARK: 받침대 (F27 1번: 곰 발밑 유리 받침 — 시계·할 일·다음 일정·상태 구슬)
+
+    private var stand: (panel: FloatingPanel, view: StandView, timer: Timer)?
+    /// 가장 급한 작업 상태(구슬 색). 받침대가 숨어 있어도 기억한다
+    private var agentState: AgentSession.State?
+
+    /// 받침대를 보일지: 설정 '알림 디스플레이 보기' — 항상 / 갖다대면(곰이나 받침대 위에 커서) / 안 봄
+    /// 오늘 카드가 받침대 자리에서 열려 있는 동안 숨김
+    private var standHidden = false
+
     private func updateClock() {
-        defer { updateTaskBadge() }
-        let show = pet.isVisible && !dock.isDocked && (ClockMode.current == .always || (ClockMode.current == .hover && hovering))
+        if standHidden { return }
+        let overStand = (stand.map { $0.panel.frame.contains(NSEvent.mouseLocation) } ?? false) || (standEvents.panel?.frame.contains(NSEvent.mouseLocation) ?? false)
+        let show = pet.isVisible && !dock.isDocked && (ClockMode.current == .always || (ClockMode.current == .hover && (hovering || overStand)))
         guard show else { hideClock(); return }
-        if clock == nil { showClock() }
-        clock?.label.stringValue = ClockMode.text(Date())   // 설정을 바꾸면 바로 반영
-        placeClock()
-        placeBeads()   // 시계가 생기거나 없어지면 구슬 자리도 바뀐다
+        if stand == nil { showClock() }
+        updateTaskBadge()
     }
 
     private func showClock() {
-        let label = NSTextField(labelWithString: "")
-        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        label.textColor = .white
-        label.alignment = .center
-        let size = CGSize(width: 116, height: 34)   // "오후 12:00:00" + 꼬리
-        let panel = FloatingPanel(size: size)
-        panel.ignoresMouseEvents = true   // 펫을 누르거나 끄는 데 방해되지 않게
-        let box = ClockBubble(frame: CGRect(origin: .zero, size: size))
-        label.frame = CGRect(x: 0, y: 12, width: size.width, height: 17)
-        box.addSubview(label)
-        panel.contentView = box
+        let panel = FloatingPanel(size: CGSize(width: 200, height: StandView.height))
+        let view = StandView(frame: CGRect(origin: .zero, size: panel.frame.size))
+        view.orb.onClick = { [weak self] in self?.openBadgeSession() }
+        view.onEnter = { [weak self] in self?.showStandEvents() }
+        view.onExit = { [weak self] in
+            guard let self else { return }
+            self.hideStandEventsIfOutside()
+            if !self.hovering { self.seeAgents() }
+            self.updateClock()
+        }
+        panel.contentView = view
         panel.orderFrontRegardless()
         follow(panel)
-        let tick = { [weak self] in
-            let t = ClockMode.text(Date())
-            label.stringValue = t
-            if let view = self?.taskBadge?.view, !view.glance.clock.isEmpty { view.glance.clock = t }   // H1: 칩에 합친 시계
-        }
-        tick()
         // 다음 초가 바뀌는 순간에 맞춰 1초마다(늦게 바뀌어 보이지 않게)
-        let timer = Ticker.every("시계 초 넘기기", 1, from: Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970))) { _ in tick() }
-        clock = (panel, label, timer)
+        let timer = Ticker.every("시계 초 넘기기", 1, from: Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970))) { [weak view] _ in
+            view?.clock = ClockMode.text(Date())
+        }
+        stand = (panel, view, timer)
     }
 
     // MARK: 남은 할 일 (F24)
 
-    private var taskBadge: (panel: FloatingPanel, view: GlanceChipsView)?
     private var chipTimer: Timer?
     deinit { chipTimer?.invalidate() }
     private var pendingTasks: [TaskItem] { TaskStore.anyOn ? TaskLogic.pending(TaskStore.shared.items, now: Date()) : [] }
@@ -557,16 +530,15 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                     states: (agents?.ordered ?? []).filter { accepts($0.tool) && ($0.state != .done || !$0.seen) }.map(\.state), now: Date())
     }
 
-    /// F26: 꺼내 둔 곰 머리 위 칩. 붙어 있으면 알약이 보여 주므로 숨긴다.
     /// 곰을 누르거나 올렸다 떼면 끝난 작업을 본 것으로 친다(F26 6차). 내 차례·실패는 남는다
     private func seeAgents() {
-        guard let agents, petView.agentBadge.state != nil else { return }
+        guard let agents, agentState != nil else { return }
         agents.markSeen(accepts); updateTaskBadge()
     }
 
     /// 구슬 누르기: 가장 급한 작업의 터미널을 앞으로
     private func openBadgeSession() {
-        guard let agents, let st = petView.agentBadge.state,
+        guard let agents, let st = agentState,
               let s = agents.ordered.first(where: { accepts($0.tool) && $0.state == st && ($0.state != .done || !$0.seen) }) else { return }
         if let app = s.app, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app) {
             NSWorkspace.shared.openApplication(at: url, configuration: .init())
@@ -574,38 +546,21 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         agents.markSeen(accepts); updateTaskBadge()
     }
 
+    /// 받침대 내용과 자리
     private func updateTaskBadge() {
-        var g = glance
-        petView.agentBadge.state = g.dots.first   // F26 5차: 작업 상태는 곰의 유리 배지로
-        if petView.agentBadge.onClick == nil { petView.agentBadge.onClick = { [weak self] in self?.openBadgeSession() } }
-        guard !g.isEmpty, pet.isVisible, !dock.isDocked else {
-            taskBadge?.panel.orderOut(nil); taskBadge = nil
-            if let clock, !clock.panel.isVisible { clock.panel.orderFrontRegardless() }   // 칩이 사라지면 시계를 따로 다시
-            return
-        }
-        // F26 H1: 시계가 켜져 있으면 칩 줄 끝에 합치고 따로 띄운 시계는 숨긴다(머리 위 한 줄)
-        if let clock {
-            g.clock = clock.label.stringValue
-            clock.panel.orderOut(nil)
-        }
-        let size = CGSize(width: max(80, GlanceChips.width(g) + 24), height: GlanceChips.height + 10)
-        if taskBadge == nil {
-            let panel = FloatingPanel(size: size)
-            panel.ignoresMouseEvents = true
-            let view = GlanceChipsView(frame: CGRect(origin: .zero, size: size))
-            panel.contentView = view
-            panel.orderFrontRegardless()
-            follow(panel)
-            taskBadge = (panel, view)
-        }
-        guard let (panel, view) = taskBadge else { return }
+        let g = glance
+        agentState = AgentFeature.enabled ? g.dots.first : nil
+        guard let (panel, view) = stand.map({ ($0.panel, $0.view) }) else { return }
+        view.clock = ClockMode.text(Date())
         view.glance = g
+        view.orb.state = agentState
+        panel.ignoresMouseEvents = false   // 커서를 올리면 오늘 남은 일정 목록(곰 아래라 곰을 가리지 않음)
+        let size = view.fittingSize
         let body = bodyFrame, v = screen.visibleFrame
         let shown = body.intersection(v).isNull ? body : body.intersection(v)
-        let top = shown.maxY + 2
-        panel.setFrame(CGRect(x: min(max(shown.midX - size.width / 2, v.minX), v.maxX - size.width),
-                              y: min(top, v.maxY - size.height), width: size.width, height: size.height), display: true)
-        view.frame = CGRect(origin: .zero, size: size)
+        let y = max(v.minY, shown.minY - size.height - 2)   // 곰 바로 아래(곰 클릭·드롭을 가리지 않게)
+        panel.setFrame(CGRect(x: min(max(shown.midX - size.width / 2, v.minX + 4), v.maxX - size.width - 4),
+                              y: y, width: size.width, height: size.height), display: true)
     }
 
     // MARK: 작업 구슬 (F14)
@@ -650,27 +605,34 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         guard let panel = beadsPanel else { return }
         let v = screen.visibleFrame, body = bodyFrame
         let shown = body.intersection(v).isNull ? body : body.intersection(v)
-        let top = clock?.panel.frame.maxY ?? shown.maxY + 2
+        let top = shown.maxY + 2
         let size = panel.frame.size
         panel.setFrameOrigin(CGPoint(x: min(max(shown.midX - size.width / 2, v.minX), v.maxX - size.width),
                                      y: min(top - BeadsView.labelHeight + 2, v.maxY - size.height)))
     }
 
-    private func placeClock() {
-        guard let clock else { return }
-        let body = bodyFrame, size = clock.panel.frame.size
-        let v = screen.visibleFrame
-        let shown = body.intersection(v).isNull ? body : body.intersection(v)   // 빼꼼 중이면 보이는 몸 위에
-        clock.panel.setFrameOrigin(CGPoint(x: min(max(shown.midX - size.width / 2, v.minX + 4), v.maxX - size.width - 4),
-                                           y: min(shown.maxY + 4, v.maxY - size.height)))
+    private func placeClock() { updateTaskBadge() }
+
+    /// F28 11차 B: 받침대 아래 오늘 남은 일정 목록
+    private let standEvents = StandEvents()
+    private func showStandEvents() {
+        guard let stand else { return }
+        let now = Date(), end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now))!
+        let list = TaskStore.anyOn ? TaskLogic.upcomingEvents(TaskStore.shared.items, now: now, days: 1).filter { $0.hasTime && ($0.date ?? end) < end } : []
+        standEvents.show(list, below: stand.panel.frame, parent: pet) { [weak self] in self?.hideStandEventsIfOutside(); self?.updateClock() }
+    }
+    private func hideStandEventsIfOutside() {
+        let m = NSEvent.mouseLocation
+        if stand?.panel.frame.contains(m) == true || standEvents.panel?.frame.contains(m) == true || TaskWindow.shared.isEditing { return }
+        standEvents.hide()
     }
 
     private func hideClock() {
-        guard let clock else { return }
-        clock.timer.invalidate()
-        clock.panel.orderOut(nil)
-        defer { placeBeads() }   // 시계 자리가 비면 구슬이 내려온다
-        self.clock = nil
+        standEvents.hide()
+        guard let stand else { return }
+        stand.timer.invalidate()
+        stand.panel.orderOut(nil)
+        self.stand = nil
     }
 
     func setResting(_ on: Bool) {
@@ -715,16 +677,35 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         agentList = nil
     }
 
-    /// F26: 두 번 누르기 → 빠른 실행
+    /// F27 피드백: 두 번 누르기 → 오늘 카드(빠른 실행은 원형 메뉴·단축키로)
     func petDoubleClicked() {
         hoverRingWork?.cancel()
         touched()
         stopMoving()
         closeRing()
-        TodayCard.shared.close()
         petView.react(.click)
-        openQuickRun()
+        if petView.island?.expanded == true { place(animated: false) }
+        openToday()
     }
+
+    /// 오른쪽 클릭 메뉴: 자주 쓰는 기능("" = 구분선)
+    private func coreMenuItems() -> [(String, () -> Void)] {
+        [("오늘 카드", { [weak self] in self?.openToday() }),
+         ("빠른 실행", { [weak self] in self?.openQuickRun() }),
+         ("할 일 창", { TaskWindow.shared.open() }),
+         ("", {}),
+         ("폴더 서랍", { [weak self] in self?.openDrawer(pinned: false) }),
+         ("오늘 찍은 캡처", { [weak self] in self?.openCaptureStrip() }),
+         ("영역 캡처", { Capture.shared.take(.area) }),
+         ("클립보드 기록", { ClipWindow.shared.open() }),
+         ("", {}),
+         ("잠 안 자기 켜기·끄기", { Awake.shared.isOn ? Awake.shared.stop() : Awake.shared.start(minutes: Awake.minutes) }),
+         ("빼꼼", { [weak self] in self?.togglePeek() }),
+         ("설정…", { [weak self] in self?.openSettings() })]
+    }
+
+    /// F27 10번: 원형 메뉴 '캡처' — 오늘 찍은 캡처 띠
+    func openCaptureStrip() { CaptureStrip.shared.toggle(near: bodyFrame, in: screen.visibleFrame) }
 
     /// 빠른 실행(4단계에서 명령 바). 그 전까지는 한 줄 입력이 있는 할 일 창을 연다.
     func openQuickRun() { QuickRunWindow.shared.open() }
@@ -736,48 +717,69 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         touched()
         stopMoving()
         if petView.showsCharacter, pokes.poke() { closeRing(); petView.react(.sulk); return }
-        closeRing()
+        if ring != nil { closeRing(); return }   // 다시 누르면 닫기
         petView.react(.click)
         if petView.island?.expanded == true { place(animated: false) }
-        // F26: 한 번 누르기 = 오늘 카드. 꺼내 둔 곰은 아래에, 펫을 옮기면 따라온다
-        TodayCard.shared.onOpenSettings = { [weak self] in self?.openSettings() }   // 누른 펫의 설정
-        TodayCard.shared.footer = [("설정", { [weak self] in self?.openSettings() })]
-        TodayCard.shared.toggle(near: { [weak self] in self?.bodyFrame ?? .zero }, in: screen.visibleFrame, below: dock == .free, parent: pet)
+        TodayCard.shared.close()
+        openRing(slots: mainSlots, acceptsFiles: false)   // F27 피드백: 한 번 누르기 = 원형 메뉴
     }
 
+    /// F26: 한 번 누르기 = 오늘 카드. 꺼내 둔 곰은 아래에, 펫을 옮기면 따라온다
+    private func openToday() {
+        TodayCard.shared.showsAgents = AgentFeature.enabled
+        TodayCard.shared.agentRows = { [weak self] in
+            guard let self, let agents = self.agents else { return [] }
+            let rank: [AgentSession.State: Int] = [.waiting: 0, .failed: 1, .working: 2, .done: 3]
+            return agents.ordered.filter { self.accepts($0.tool) && ($0.state != .done || !$0.seen) }
+                .sorted { rank[$0.state]! < rank[$1.state]! }
+                .map { ($0.shortName, $0.state == .waiting ? "허락 기다림" : $0.state == .failed ? "실패" : $0.state == .working ? "하는 중" : "끝남", $0.state.color) }
+        }
+        TodayCard.shared.onOpenAgents = { [weak self] in self?.openAgentList() }
+        TodayCard.shared.onOpenSettings = { [weak self] in self?.openSettings() }   // 누른 펫의 설정
+        TodayCard.shared.footer = [("설정", { [weak self] in self?.openSettings() })]
+        // F27 10차 A+F: 받침대가 있으면 그 자리에서 카드로 자라나고, 열린 동안 받침대는 숨긴다
+        if TodayCard.shared.isOpen { TodayCard.shared.close(); return }
+        if stand == nil, dock == .free, pet.isVisible { showClock(); updateTaskBadge() }
+        let from = dock == .free ? stand?.panel.frame : nil
+        TodayCard.shared.onClose = { [weak self] in self?.standHidden = false; self?.updateClock() }
+        TodayCard.shared.open(near: { [weak self] in self?.bodyFrame ?? .zero }, in: screen.visibleFrame, below: dock == .free, parent: pet, growFrom: from)
+        if from != nil { standHidden = true; stand?.panel.orderOut(nil) }
+    }
+
+    /// F27 3번 A: 반원 6칸(오늘 카드·빠른 실행·폴더 서랍·캡처·작업 목록·잠 안 자기). 이름표는 가리킨 칸 하나만.
+    /// 빼꼼·그 사이 소식·설정은 메뉴 막대에서.
     private var mainSlots: [Slot] {
-        // 상황 칸: 그 사이 N건 > 변환 결과 > 쓰다듬기. 기다리는·끝난 작업은 '작업 목록' 칸이 보여 준다(F26, 중복 제거)
-        let first: Slot =
-            !briefing.items.isEmpty ? Slot(title: "그 사이 \(briefing.items.count)건", symbol: "sun.horizon") { [weak self] in self?.openBriefing() }
-            : !lastResults.isEmpty ? Slot(title: "변환 결과 보기", symbol: "checkmark.circle") { [weak self] in self?.revealResults() }
-            : Slot(title: "쓰다듬기", symbol: "hand.wave") { [weak self] in self?.petRubbed() }
-        var status = first
-        status.id = "status"
         let waitingCount = agents?.waiting ?? 0
-        // F26: 단축키가 없거나 누르는 게 편한 것만 7칸(캡처·클립보드·창 정리·서랍은 단축키로, 싱잉볼은 꺼 둠)
         let slots = [
-            status,
-            Slot(title: pendingTasks.isEmpty ? "할 일" : "할 일 \(pendingTasks.count)", symbol: "checklist.checked", badge: pendingTasks.isEmpty ? nil : pendingTasks.count, id: "tasks") { TaskWindow.shared.open() },
-            Slot(title: "빠른 실행", symbol: "bolt.fill", id: "quickrun") { [weak self] in self?.openQuickRun() },
-            Slot(title: "작업 목록", symbol: "terminal", badge: waitingCount > 0 ? waitingCount : nil, id: "agents") { [weak self] in self?.openAgentList() },
-            Slot(title: Awake.shared.isOn ? "잠 안 자기 켜짐" : "잠 안 자기", symbol: "cup.and.saucer.fill", id: "awake") {
+            Slot(title: pendingTasks.isEmpty ? "오늘 카드" : "오늘 카드 · 할 일 \(pendingTasks.count)", symbol: "sun.max.fill", badge: pendingTasks.isEmpty ? nil : pendingTasks.count, id: "today", color: .systemOrange) { [weak self] in self?.openToday() },
+            Slot(title: "빠른 실행", symbol: "bolt.fill", id: "quickrun", color: .systemYellow) { [weak self] in self?.openQuickRun() },
+            Slot(title: "폴더 서랍", symbol: "folder.fill", id: "drawer", color: .systemBlue) { [weak self] in self?.openDrawer(pinned: false) },
+            Slot(title: "캡처", symbol: "camera.viewfinder", id: "capture", color: .systemPink) { [weak self] in self?.openCaptureStrip() },
+            Slot(title: Awake.shared.isOn ? "잠 안 자기 켜짐" : "잠 안 자기", symbol: "cup.and.saucer.fill", id: "awake", color: .systemBrown) {
                 Awake.shared.isOn ? Awake.shared.stop() : Awake.shared.start(minutes: Awake.minutes)
             },
-            Slot(title: dock.isDocked ? "빼꼼 그만" : "빼꼼", symbol: "eye", id: "peek") { [weak self] in self?.togglePeek() },
-            Slot(title: "설정", symbol: "gearshape.fill", id: "settings") { [weak self] in self?.openSettings() },
-        ]
+            Slot(title: "설정", symbol: "gearshape.fill", id: "settings", color: .systemGray) { [weak self] in self?.openSettings() },
+        ] + (AgentFeature.enabled ? [Slot(title: "작업 목록", symbol: "terminal", badge: waitingCount > 0 ? waitingCount : nil, id: "agents", color: .systemGreen) { [weak self] in self?.openAgentList() }] : [])
         // F21: 사용자가 옮긴 순서
         let order = RingOrder.apply(saved: UserDefaults.standard.stringArray(forKey: RingOrder.key) ?? [], ids: slots.map(\.id))
         return order.compactMap { id in slots.first { $0.id == id } }
     }
 
+    /// 다른 패널 창(오늘 카드·서랍·알림 등)이 차지한 자리. 원형 메뉴가 피한다
+    private var occupiedFrames: [CGRect] {
+        let mine: [NSWindow?] = [pet, stand?.panel, ring]
+        return NSApp.windows.filter { w in w.isVisible && w.level >= .floating && w.frame.width > 60 && !mine.contains { $0 === w } }.map(\.frame)
+    }
+
     /// F26: 마우스를 올리고 0.35초 머물면 원형 메뉴(포커스를 뺏지 않는 링, 커서가 떠나면 닫힘)
     private var hoverRingWork: DispatchWorkItem?
     static let hoverDelay = 0.35
+    /// F27 피드백: 원형 메뉴는 누를 때만(올려서 열기는 끔, 코드는 남김)
+    static let hoverRingOn = false
     private var hoverRingTimer: Timer?
     private func scheduleHoverRing(_ inside: Bool) {
         hoverRingWork?.cancel()
-        guard inside, ring == nil, drawer == nil else { return }
+        guard Self.hoverRingOn, inside, ring == nil, drawer == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.hovering, self.ring == nil, self.drawer == nil, self.dragOrigin == nil,
                   NSEvent.pressedMouseButtons == 0, self.petView.base != .drag else { return }
@@ -797,12 +799,21 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let bodySize = max(body.width, body.height)
         var roomAbove = v.maxY - center.y > 96 + max(0, bodySize - 80) * 0.6 + 40
         var points = Geometry.slotCenters(count: slots.count, dock: dock, center: center, size: bodySize, roomAbove: roomAbove)
+        var labelBelow = roomAbove   // 이름표 하나: 칸이 위면 몸 아래, 아니면 몸 위
+        if dock == .free {
+            // F27: 다른 패널과 겹치지 않는 쪽(위·아래·왼쪽·오른쪽)으로 반원을 편다
+            let radius = 96 + max(0, Double(bodySize) - 80) * 0.6
+            let base = Geometry.ringDirection(center: center, radius: radius, in: v, occupied: occupiedFrames, preferUp: roomAbove)
+            points = Geometry.halfRing(count: slots.count, center: center, radius: radius, base: base)
+            roomAbove = base == 90
+            labelBelow = base != 270
+        }
         if petView.island != nil {   // 알약: 접힌 알약 안쪽으로 한 겹 부채꼴
             roomAbove = false
             points = Geometry.fanCenters(count: slots.count, dock: dock, pill: body)
         }
         let pad: CGFloat = 70
-        let xs = points.map(\.x) + [center.x], ys = points.map(\.y) + [center.y, body.minY - 40]   // 펫 아래 이름표 자리
+        let xs = points.map(\.x) + [center.x], ys = points.map(\.y) + [center.y, body.minY - 40, body.maxY + 40]   // 펫 아래·위 이름표 자리
         let rect = CGRect(x: xs.min()! - pad, y: ys.min()! - pad,
                           width: xs.max()! - xs.min()! + pad * 2, height: ys.max()! - ys.min()! + pad * 2)
 
@@ -812,9 +823,9 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         panel.setFrame(rect, display: false)
         let view = RingView(frame: CGRect(origin: .zero, size: rect.size))
         view.slots = slots
-        view.alwaysLabels = !acceptsFiles   // F26: 메인 링은 칸마다 이름표
+        view.alwaysLabels = false   // F27: 이름표는 가리킨 칸 하나만, 한 곳에
         view.origin = CGPoint(x: center.x - rect.minX, y: center.y - rect.minY)
-        if dock == .free && roomAbove && acceptsFiles { view.labelTop = body.minY - rect.minY - 8 }
+        if dock == .free { view.labelTop = labelBelow ? body.minY - rect.minY - 8 : body.maxY - rect.minY + 34 }
         view.centers = points.map { CGPoint(x: $0.x - rect.minX, y: $0.y - rect.minY) }
         view.acceptsFiles = acceptsFiles
         view.onClose = { [weak self] in self?.closeRing() }
@@ -875,34 +886,38 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         stopMoving()
         closeDrawer()
         if dock.isDocked { place(animated: true, out: 1) }
-        openRing(slots: convertSlots(for: urls), acceptsFiles: true)
+        closeRing()
+        // F27: 원형 변환 — 곰 위에 둥근 칸
+        let center = Geometry.visibleCenter(of: bodyFrame, in: screen.visibleFrame)
+        wheel.open(items: convertItems(for: urls), files: urls, center: center, in: screen.visibleFrame) { [weak self] in
+            self?.say("둘레의 칸 위에 놓아 주세요")
+        }
         petView.react(.fileNear)
     }
 
     func petFilesDroppedOnBody() {
-        closeRing()
+        wheel.close()
         say("둘레의 칸 위에 놓아 주세요")
     }
 
-    private func convertSlots(for urls: [URL]) -> [Slot] {
-        let use = UserDefaults.standard.dictionary(forKey: "convertUse") as? [String: Int] ?? [:]
-        // 이 Mac에서 자주 쓴 변환이 위쪽(앞쪽) 칸에 온다
-        let ops = ConvertOp.options(for: urls).enumerated()
-            .sorted { (use[$0.element.rawValue] ?? 0, -$0.offset) > (use[$1.element.rawValue] ?? 0, -$1.offset) }
-            .map(\.element)
-        var slots = ops.map { op in Slot(title: op.title, symbol: op.symbol) { [weak self] in self?.convert(op, urls) } }
+    private let wheel = ConvertWheel()
 
+    private func convertItems(for urls: [URL]) -> [WheelItem] {
+        var items = ConvertOp.options(for: urls).map { op in
+            WheelItem(title: op.short, note: op.note, isFormat: op.isFormat, detail: op.title + "\n원본은 그대로") { [weak self] in self?.convert(op, urls) }
+        }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
         if !folders.isEmpty, folders.count == urls.count {
-            slots.append(Slot(title: "서랍에 저장", symbol: "folder.badge.plus") { [weak self] in
+            items.append(WheelItem(title: "서랍에 저장", isFormat: false, detail: "고정 폴더로") { [weak self] in
                 let reasons = folders.compactMap { DrawerStore.shared.add($0) }
+                self?.wheel.close()
                 self?.say(reasons.first ?? "서랍에 넣었어요")
             })
         }
-        if slots.isEmpty {
-            slots.append(Slot(title: "이 형식은 아직 못 바꿔요", symbol: "questionmark") {})
+        if items.count <= 1, ConvertOp.options(for: urls) == [.zip] {
+            items.insert(WheelItem(title: "다른 변환 없음", isFormat: false, detail: "이 형식은 아직 못 바꿔요") { [weak self] in self?.wheel.close() }, at: 0)
         }
-        return slots
+        return items
     }
 
     private func convert(_ op: ConvertOp, _ urls: [URL]) {
@@ -911,28 +926,24 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         UserDefaults.standard.set(use, forKey: "convertUse")
 
         say("\(op.title) 바꾸는 중… (\(urls.count)개)")
+        wheel.showWorking(op.short)
         petView.react(.converting)
         convertingCount += 1
         Converter.run(op, urls) { [weak self] outputs, errors in
             guard let self else { return }
+            if self.wheel.isWorking { self.wheel.close() }   // 그 사이 새로 연 원은 닫지 않는다
             self.convertingCount -= 1
             if self.petView.base == .converting { self.petView.react(self.calm) }
             if !outputs.isEmpty {
-                self.lastResults = outputs
                 self.conversions = Array((self.conversions + [(Date(), outputs)]).suffix(50))
             }
             if errors.isEmpty {
                 self.petView.react(.converted)
-                self.say("다 바꿨어요. 링 첫 칸에서 결과를 볼 수 있어요")
+                self.say("다 바꿨어요. 원본 옆에 ‘(깍지)’로 저장했어요")
             } else {
                 self.say(outputs.isEmpty ? errors[0] : "\(outputs.count)개 성공, \(errors.count)개 실패: \(errors[0])", seconds: 4)
             }
         }
-    }
-
-    private func revealResults() {
-        NSWorkspace.shared.activateFileViewerSelecting(lastResults)
-        lastResults = []
     }
 
     // MARK: 폴더 서랍
@@ -1011,11 +1022,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let glassRow = NSStackView(views: [NSTextField(labelWithString: "불투명"), glassSlider, NSTextField(labelWithString: "투명")])
         glassRow.spacing = 6
 
-        // 캐릭터: 콩깍지 + 그림이 있는 캐릭터
-        let chars = ["bear3d", "pod"] + Character.available().filter { $0 != "bear3d" }
-        let charPopup = popup(chars.map { $0 == "bear3d" ? "곰 3D (기본)" : $0 == "pod" ? "콩깍지" : Character.names[$0] ?? $0 },
-                              selected: chars.firstIndex(of: characterName) ?? 0) { [weak self] in self?.characterName = chars[$0] }
-
         func hint(_ text: String) -> NSTextField {
             let t = NSTextField(labelWithString: text)
             t.font = .systemFont(ofSize: 11)
@@ -1060,6 +1066,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 guard let v = slider.map({ Int($0.doubleValue.rounded()) }) else { return }
                 KeyRepeat.set(key, v)
                 show(v)
+                repeatDemo.restart()
             }
             slider.target = handler
             slider.action = #selector(ClosureButton.performClick(_:))
@@ -1068,6 +1075,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             row.spacing = 6
             return row
         }
+        let repeatDemo = KeyRepeatDemo(frame: CGRect(x: 0, y: 0, width: 360, height: 54))
+        settingsKeepAlive.append(repeatDemo)
         let initialRow = repeatRow(KeyRepeat.initial), rateRow = repeatRow(KeyRepeat.rate)
         let restoreButton = ClosureButton("처음 값으로") { [weak self] in
             KeyRepeat.restore()
@@ -1076,6 +1085,11 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let keyTest = KeyTestField()
         settingsKeepAlive.append(keyTest)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "개발 빌드"
+        func link(_ title: String, _ url: String) -> NSView {
+            let b = ClosureButton(title) { NSWorkspace.shared.open(URL(string: url)!) }
+            b.bezelStyle = .inline
+            return b
+        }
         func permission(_ on: Bool) -> NSTextField {
             let t = NSTextField(labelWithString: on ? "허용됨" : "허용 안 됨")
             t.textColor = on ? .systemGreen : .secondaryLabelColor
@@ -1084,36 +1098,37 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let tabs = [
             SettingsTab(id: "general", title: "일반", symbol: "gearshape", content: SettingsTabs.grid([(nil, [
                 [label("로그인할 때 Tasky 열기"), check(LoginItem.isOn) { LoginItem.set($0) }],
-                [label("원형 메뉴 버튼 투명도"), glassRow, hint("펫을 누르면 나오는 버튼이에요")],
+                [label("원형 메뉴 버튼 투명도"), glassRow, hint("곰을 한 번 누르면 나오는 반원 메뉴 버튼이에요. 투명할수록 뒤 화면이 비쳐요.")],
                 [NSView(), ringPreview],
                 [label("폴더 서랍 바로 열기"),
                  popup(Self.drawerKeys.map(\.title), selected: Self.drawerKeys.firstIndex { $0.id == UserDefaults.standard.string(forKey: "drawerKey") } ?? 0) {
                      UserDefaults.standard.set(Self.drawerKeys[$0].id, forKey: "drawerKey") }],
-                [NSView(), hint("이 키를 누른 채 펫에 커서를 올리면 열려요")],
+                [NSView(), hint("이 키를 누른 채 곰에 커서를 올리면 자주 가는 폴더 서랍이 열려요. 파일을 끌고 올 때 이 키를 누르고 있으면 서랍에 바로 넣을 수 있어요.")],
                 // F26: 싱잉볼은 꺼 둠(원형 메뉴에서도 뺐다) — 소리 크기 설정도 숨긴다
                 [label("보이는 방식"), popup(["곰과 알약", "메뉴 막대만"], selected: App.petsHidden ? 1 : 0) { App.petsHidden = $0 == 1 },
-                 hint("메뉴 막대만: 곰을 숨기고 메뉴 막대에 할 일 수·다음 일정·작업 점을 보여요")],
+                 hint("메뉴 막대만: 곰을 숨기고 화면 맨 위 메뉴 막대에 할 일 수·다음 일정을 보여 줘요. 기능은 메뉴 막대 아이콘에서 써요.")],
                 [label("펫 움직임 끄기"), check(Pet3DView.still) { Pet3DView.still = $0 }, hint("3D 곰이 가만히 멈춰 CPU를 아껴요")],
                 [label("원형 메뉴 순서"), ClosureButton("처음대로") { UserDefaults.standard.removeObject(forKey: RingOrder.key) },
                  hint("칸을 0.3초 꾹 눌러 들고 옮길 수 있어요")],
-                [label("펫 위에 시계"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
+                [label("알림 디스플레이 보기"), popup(ClockMode.allCases.map(\.title), selected: ClockMode.allCases.firstIndex(of: .current) ?? 0) {
                     ClockMode.current = ClockMode.allCases[$0] }],
+                [NSView(), hint("곰 발밑 유리 받침대(시계·남은 할 일·다음 일정)를 언제 보일지예요. 갖다대면: 곰에 커서를 올렸을 때만. 곰을 두 번 누르면 받침대가 오늘 카드로 커져요.")],
                 [label("24시간제로 보기"), check(ClockMode.hour24) { ClockMode.hour24 = $0 }],
                 // F26: 작업 구슬은 꺼 둠(머리 위 칩으로 대신): 펫 위에 작업 구슬 설정
                 [label("초까지 보기"), check(ClockMode.showSeconds) { ClockMode.showSeconds = $0 }],
             ])])),
             SettingsTab(id: "pet", title: "펫", symbol: "pawprint", content: SettingsTabs.grid([("이 펫에만 적용 — 펫이 여러 마리면 지금 연 펫만 바뀌어요", [
                 [label("크기"), sizeRow],
-                [label("캐릭터"), charPopup],
+            ] + (AgentFeature.enabled ? [
                 [label("이 펫이 알려 줄 작업"),
                  popup(Self.alertTools.map(\.1), selected: Self.alertTools.firstIndex { $0.0 == alertTool } ?? 0) { [weak self] in
                      self?.alertTool = Self.alertTools[$0].0 }],
-            ])])),
+            ] : []))])),
+            // F27 피드백: AI 작업 기능은 꺼 둠(코드는 남김)
             SettingsTab(id: "alerts", title: "작업 알림", symbol: "bell", content: SettingsTabs.grid([(nil, [
                 [label("알림 소리"), check(AlertCard.soundOn) { AlertCard.soundOn = $0 }],
-                [label("끝남 알림 기준"), doneSecondsField(), hint("이 시간보다 오래 걸린 작업이 끝났을 때만 알려요. 짧은 답이나 지금 보고 있는 터미널의 작업은 알리지 않고 상태 점만 바꿔요. 내 차례·실패는 늘 알려요.")],
-                [label("Claude Code 연결"), toolButtons[0], hint("끝나거나 내 승인이 필요하면 펫이 알려요")],
-                [label("Codex 연결"), toolButtons[1], hint("끝나거나 내 승인이 필요하면 펫이 알려요")],
+                [label("Claude Code 연결"), toolButtons[0], hint("내 승인이 필요할 때만 펫이 알려요. 끝남·실패는 받침대의 상태 구슬(곰에 커서를 올리면 보임)과 메뉴 막대 '작업 목록'에서 봐요.")],
+                [label("Codex 연결"), toolButtons[1], hint("내 승인이 필요할 때만 펫이 알려요. 끝남·실패는 곰의 상태 구슬과 메뉴 막대 '작업 목록'에서 봐요.")],
             ])])),
             SettingsTab(id: "keyboard", title: "키보드", symbol: "keyboard", content: SettingsTabs.grid([
                 ("여기서 쳐 보기", [[NSView(), keyTest]]),
@@ -1129,10 +1144,14 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                     refreshKeyboard()
                 }],
                 [NSView(), kbStatusRow],
+                [NSView(), hint("Caps Lock: 짧게 누르면 한/영, 0.5초 꾹 누르면 대문자 고정. 누르는 순간 바뀌어서 빠르게 쳐도 씹히지 않아요(손쉬운 사용 권한이 켜져 있으면 바뀐 뒤에 다음 글자가 들어가요). 다른 한영 전환 앱과 함께 켜 두면 서로 부딪혀요.")],
                 ]), ("키 반복", [
                 [label("꾹 누르고 반복이 시작될 때까지"), initialRow],
+                [NSView(), hint("키(예: ㅋ, ←, ⌫)를 누른 채로 있을 때, 두 번째 글자가 나오기까지 기다리는 시간이에요. 짧을수록 꾹 누르자마자 반복돼요.")],
                 [label("반복 빠르기"), rateRow],
-                [NSView(), hint("바로 적용되고 계속 유지돼요")],
+                [NSView(), hint("반복이 시작된 뒤 글자가 하나씩 나오는 간격이에요. 짧을수록 ⌫로 빨리 지우고 ←→로 빨리 움직여요.")],
+                [label("미리보기"), repeatDemo],
+                [NSView(), hint("키를 꾹 눌렀을 때 지금 값으로 글자가 어떻게 나오는지 보여 줘요(실제 키 입력 아님). 바로 적용되고 계속 유지돼요. 일부 앱은 다시 열어야 적용돼요.")],
                 [NSView(), restoreButton],
                 ]),
             ])),
@@ -1147,11 +1166,25 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             }())] : []) + [
             SettingsTab(id: "about", title: "정보", symbol: "info.circle", content: SettingsTabs.grid([(nil, [
                 [label("버전"), NSTextField(labelWithString: version)],
-                [label("입력 모니터링"), permission(CGPreflightListenEventAccess()), hint("한 키로 한영 바꾸기에 써요")],
-                [label("손쉬운 사용"), permission(AXIsProcessTrusted()), hint("단축키로 창 정리에 써요")],
+                [label("만든 곳"), link("github.com/hyeon0208/tasky", "https://github.com/hyeon0208/tasky"), hint("MIT 라이선스 · 버그와 제안은 GitHub 이슈로")],
+                [label("데이터 저장 위치"), NSTextField(labelWithString: "이 Mac에만"), hint("설정·클립보드 기록·서랍은 이 Mac에만 저장되고 어디로도 보내지 않아요. 할 일·일정은 macOS '미리 알림'·'캘린더' 앱에 저장돼요.")],
+            ]), ("권한 — 쓰는 기능을 켰을 때만 물어요", [
+                [label("입력 모니터링"), permission(CGPreflightListenEventAccess()), hint("한 키로 한영 바꾸기: 어떤 키를 눌렀는지만 판단하고 저장·전송하지 않아요")],
+                [label("손쉬운 사용"), permission(AXIsProcessTrusted()), hint("창 정리: 다른 앱 창의 위치·크기를 바꿔요")],
+                [label("화면 기록"), permission(CGPreflightScreenCaptureAccess()), hint("화면 캡처")],
+                [label("미리 알림"), permission(EKEventStore.authorizationStatus(for: .reminder) == .fullAccess), hint("할 일 읽기·추가·끝내기")],
+                [label("캘린더"), permission(EKEventStore.authorizationStatus(for: .event) == .fullAccess), hint("일정 읽기·추가·고치기")],
+                [label("집중 모드 상태"), permission(FocusState.available), hint("집중 모드일 때 일정·할 일 알림을 띄우지 않으려고 켜져 있는지만 봐요")],
+                [NSView(), ClosureButton("시스템 설정의 개인정보 보호 열기") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security")!) }],
+            ]), ("단축키 한눈에", [
+                [label("빠른 실행"), NSTextField(labelWithString: QuickRun.keyTitle.isEmpty ? "꺼짐" : QuickRun.keyTitle)],
+                [label("클립보드 기록"), NSTextField(labelWithString: ClipWatcher.enabled ? HotKey.title() : "꺼짐")],
+                [label("화면 캡처"), NSTextField(labelWithString: Capture.enabled ? CaptureMode.allCases.compactMap { m in m.key.map { m.title + " " + HotKey.title(keyCode: $0.code, modifiers: $0.mods) } }.joined(separator: " · ") : "꺼짐")],
+                [label("창 정리"), NSTextField(labelWithString: SnapController.enabled ? "⌃⌥를 누르고 있으면 도움말" : "꺼짐")],
+                [label("곰"), NSTextField(labelWithString: "한 번 누르기: 원형 메뉴 · 두 번: 오늘 카드 · 오른쪽 클릭: 기능 메뉴")],
             ])])),
         ]
-        let tabView = SettingsTabs(tabs: tabs)
+        let tabView = SettingsTabs(tabs: tabs.filter { AgentFeature.enabled || $0.id != "alerts" })
         let size = tabView.frame.size
         let effect = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
         effect.material = .hudWindow
@@ -1333,18 +1366,6 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         ])])
     }
 
-    /// F26: 끝남 알림 기준(초) 입력칸
-    private func doneSecondsField() -> NSView {
-        let f = NSTextField(string: String(Int(DoneAlert.minSeconds)))
-        f.alignment = .right
-        f.widthAnchor.constraint(equalToConstant: 48).isActive = true
-        let fmt = NumberFormatter(); fmt.minimum = 0; fmt.maximum = 3600; fmt.allowsFloats = false
-        f.formatter = fmt
-        let save = ClosureButton("저장") { [weak f] in if let f { DoneAlert.minSeconds = Double(f.integerValue) } }
-        f.target = save; f.action = #selector(NSButton.performClick(_:))
-        return NSStackView(views: [f, NSTextField(labelWithString: "초"), save])
-    }
-
     /// 설정 '할 일·일정' 탭 (F24)
     private func taskSettings() -> NSView {
         func label(_ t: String) -> NSTextField { NSTextField(labelWithString: t) }
@@ -1356,6 +1377,13 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             return f
         }
         let store = TaskStore.shared
+        let nudges = [0, 15, 30, 60, 120]
+        func choice(_ titles: [String], selected: Int, _ pick: @escaping (Int) -> Void) -> NSPopUpButton {
+            let p = NSPopUpButton()
+            for (i, t) in titles.enumerated() { p.menu?.addItem(ClosureMenuItem(t) { pick(i) }) }
+            p.selectItem(at: selected)
+            return p
+        }
         func status(_ type: EKEntityType, on: Bool) -> String {
             !on ? "꺼져 있어요" : !TaskStore.canAsk(type) ? "앱으로 실행해야 해요(dist/Tasky.app)"
                 : TaskStore.granted(type) ? "켜져 있어요" : "권한이 필요해요. 권한을 켠 뒤 Tasky를 다시 열어야 할 수 있어요."
@@ -1408,21 +1436,28 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let quickReset = ClosureButton("기본") { UserDefaults.standard.removeObject(forKey: "quickRunKey"); QuickRun.register(); quickRefresh() }
         quickRefresh()
         return SettingsTabs.grid([(nil, [
-            [label("할 일"), SettingsTabs.toggle(TaskStore.remindersOn) { on in store.setEnabled(.reminder, on) { refresh() } }, note("켜면 '미리 알림' 권한을 물어요")],
+            [label("할 일"), SettingsTabs.toggle(TaskStore.remindersOn) { on in store.setEnabled(.reminder, on) { refresh() } }, note("Tasky의 할 일은 Mac에 들어 있는 '미리 알림' 앱에 저장돼요. 그래서 iPhone 미리 알림에도 똑같이 보여요. 켜면 '미리 알림' 권한을 물어요.")],
             [NSView(), NSStackView(views: [remStatus, remOpen])],
-            [label("저장할 목록"), remList],
-            [label("일정"), SettingsTabs.toggle(TaskStore.eventsOn) { on in store.setEnabled(.event, on) { refresh() } }, note("켜면 '캘린더' 권한을 물어요")],
+            [label("할 일 저장할 목록"), remList],
+            [NSView(), note("'미리 알림' 앱에는 '미리 알림'·'업무'처럼 목록이 여러 개 있을 수 있어요. 오늘 카드나 빠른 실행에서 새 할 일을 적으면 여기서 고른 목록에 들어가요. 할 일을 보여 줄 때는 모든 목록을 함께 보여 줘요.")],
+            [label("일정"), SettingsTabs.toggle(TaskStore.eventsOn) { on in store.setEnabled(.event, on) { refresh() } }, note("일정은 Mac의 '캘린더' 앱(iCloud·Google 계정 포함)에서 읽고 저장해요. 켜면 '캘린더' 권한을 물어요.")],
             [NSView(), NSStackView(views: [evStatus, evOpen])],
-            [label("저장할 캘린더"), evList],
+            [label("일정 저장할 캘린더"), evList],
+            [NSView(), note("'캘린더' 앱에는 '집'·'직장'·Google 계정처럼 캘린더가 여러 개 있어요. 시간이 있는 입력(예: 내일 3시 치과)은 일정으로 저장되는데, 그때 들어갈 캘린더를 고르는 곳이에요. 볼 때는 모든 캘린더를 함께 보여 줘요.")],
+            [label("일정 볼 기간"), choice((1...7).map { "\($0)일" }, selected: TaskStore.eventDays - 1) { TaskStore.eventDays = $0 + 1 }],
+            [NSView(), note("오늘 카드의 '일정' 칸에 오늘부터 며칠 뒤 일정까지 보여 줄지예요.")],
+            [label("할 일 알려 주기"), choice(nudges.map { $0 == 0 ? "끄기" : "\($0)분마다" }, selected: nudges.firstIndex(of: TaskStore.nudgeMinutes) ?? 3) { TaskStore.nudgeMinutes = nudges[$0] }],
+            [NSView(), note("일정은 1시간 전에 알리고(다시 알려 줄 시간은 알림에서 고름), '알겠어요(알림 끄기)'를 누르지 않았으면 시작할 때 한 번 더 알려 줘요. 남은 할 일은 정한 간격마다 곰 옆에 알려 줘요. macOS 집중 모드가 켜져 있으면 띄우지 않아요.")],
             [label("알릴 때 소리"), SettingsTabs.toggle(TaskStore.soundOn) { TaskStore.soundOn = $0 }],
             [NSView(), note("시간이 된 항목은 macOS 알림으로도 와요. Tasky가 켜져 있으면 곰도 알려 줘요.")],
             [label("빠른 실행 단축키"), NSStackView(views: [quickKey, quickReset, quickMark])],
+            [NSView(), note("어느 앱에서든 이 키를 누르면 화면 가운데에 명령 바가 떠요. 할 일·일정 적기, 기능 실행(캡처·창 정리 등), 할 일·클립보드 찾기를 한 줄로 해요.")],
             [NSView(), note("할 일 적기·기능 실행·찾기를 한 줄로 해요. 곰을 두 번 눌러도 열려요. ⌘P는 거의 모든 앱의 '프린트'라 ⌘⇧P를 기본으로 했어요.")],
         ])])
     }
 
     /// F24: 시간이 된 할 일·일정
-    func taskDue(_ item: TaskItem) {
+    func taskDue(_ item: TaskNotice) {
         let bar = pet.isVisible ? nil : App.menuBarAnchor()   // F26: 메뉴 막대만 쓰면 상태 칸 아래에
         guard pet.isVisible || bar != nil else { return }
         petView.react(.jobWaiting)
@@ -1677,6 +1712,8 @@ final class App: NSObject {
     private var bearIcon: NSImage?
     private var awakeItem: NSMenuItem?
     private var todayItem: NSMenuItem?
+    private var briefingItem: NSMenuItem?
+    private var peekItem: NSMenuItem?
     private var quickRunItem: NSMenuItem?
     private var captureItem: NSMenuItem?
     private var steamTimer: Timer?
@@ -1730,6 +1767,7 @@ final class App: NSObject {
         QuickRun.register()
         SnapController.shared.start()   // F15: 켜져 있을 때만 단축키·마우스 감시
         Capture.shared.start()   // F22: 켜져 있을 때만 단축키
+        FocusState.start()
         TaskAlerts.shared.onDue = { [weak self] item in self?.pets.first { $0.isVisible }?.taskDue(item) }
         TaskStore.shared.start()   // F24: 켜져 있고 권한이 있을 때만 읽는다(권한 창은 띄우지 않음)
         PerfSampler.shared.update()   // --debug이고 기록이 켜져 있으면 바로 기록 시작
@@ -1858,6 +1896,13 @@ final class App: NSObject {
         todayItem = today
         menu.addItem(ClosureMenuItem("빠른 실행") { DispatchQueue.main.async { QuickRunWindow.shared.open() } })
         quickRunItem = menu.items.last
+        // F27: 원형 메뉴에서 빠진 것과 작업 목록(승인 대기 외 작업은 여기서 본다)
+        if AgentFeature.enabled { menu.addItem(ClosureMenuItem("작업 목록") { [weak self] in DispatchQueue.main.async { (self?.pets.first { $0.isVisible } ?? self?.pets.first)?.openAgentList() } }) }
+        let away = ClosureMenuItem("그 사이 소식") { [weak self] in DispatchQueue.main.async { self?.pets.first { $0.isVisible }?.openBriefing() } }
+        menu.addItem(away)
+        briefingItem = away
+        menu.addItem(ClosureMenuItem("빼꼼") { [weak self] in DispatchQueue.main.async { self?.pets.first { $0.isVisible }?.togglePeek() } })
+        peekItem = menu.items.last
         menu.addItem(.separator())
         // F23 잠 안 자기: 고르면 그 시간으로 바로 켜진다
         let awake = NSMenuItem(title: "잠 안 자기", action: nil, keyEquivalent: "")
@@ -1983,6 +2028,12 @@ final class App: NSObject {
         todayItem?.title = g.menuTitle.isEmpty ? "오늘 보기" : "오늘 보기 — " + g.menuTitle
         todayItem?.isHidden = !App.petsHidden
         quickRunItem?.title = QuickRun.keyTitle.isEmpty ? "빠른 실행" : "빠른 실행  " + QuickRun.keyTitle
+        let pet = pets.first { $0.isVisible }
+        let away = pet?.briefing.items.count ?? 0
+        briefingItem?.title = "그 사이 소식 \(away)건"
+        briefingItem?.isHidden = away == 0
+        peekItem?.title = pet?.isDocked == true ? "빼꼼 그만" : "빼꼼"
+        peekItem?.isHidden = pet == nil
     }
 
     private func refreshAwakeMenu() {
@@ -2043,5 +2094,44 @@ enum LoginItem {
         ]
         try? FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
         (dict as NSDictionary).write(to: plist, atomically: true)
+    }
+}
+
+/// F28: 키 반복 미리보기. 지금 설정(시작까지·간격)으로 'ㅋ'가 이어지는 모습을 되풀이해 보여 준다
+final class KeyRepeatDemo: NSView {
+    private let text = NSTextField(labelWithString: "")
+    private let key = NSTextField(labelWithString: "ㅋ")
+    private var timer: Timer?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        key.font = .systemFont(ofSize: 13, weight: .bold); key.alignment = .center
+        key.wantsLayer = true; key.layer?.cornerRadius = 6; key.layer?.borderWidth = 1
+        key.layer?.borderColor = NSColor.secondaryLabelColor.cgColor
+        key.frame = CGRect(x: 0, y: 16, width: 28, height: 22)
+        text.font = .monospacedSystemFont(ofSize: 13, weight: .medium); text.lineBreakMode = .byClipping
+        text.frame = CGRect(x: 40, y: 18, width: frame.width - 40, height: 18)
+        addSubview(key); addSubview(text)
+        widthAnchor.constraint(equalToConstant: frame.width).isActive = true
+        heightAnchor.constraint(equalToConstant: frame.height).isActive = true
+        restart()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    deinit { timer?.invalidate() }
+    override func viewDidMoveToWindow() { if window == nil { timer?.invalidate(); timer = nil } else if timer == nil { restart() } }
+
+    /// 눌림(1.6초) → 쉼(0.8초)을 되풀이. 첫 글자 → 시작까지 기다림 → 간격마다 한 글자
+    func restart() {
+        timer?.invalidate()
+        let initial = Double(KeyRepeat.ms(KeyRepeat.read(KeyRepeat.initial) ?? KeyRepeat.fallback(KeyRepeat.initial))) / 1000
+        let rate = max(0.015, Double(KeyRepeat.ms(KeyRepeat.read(KeyRepeat.rate) ?? KeyRepeat.fallback(KeyRepeat.rate))) / 1000)
+        let start = Date()
+        timer = Ticker.every("키 반복 미리보기", 1.0 / 60) { [weak self] _ in
+            guard let self else { return }
+            let t = Date().timeIntervalSince(start).truncatingRemainder(dividingBy: 2.4)
+            let down = t < 1.6
+            let n = !down ? 0 : t < initial ? 1 : 1 + Int((t - initial) / rate) + 1
+            self.key.layer?.backgroundColor = (down ? NSColor.controlAccentColor.withAlphaComponent(0.35) : NSColor.clear).cgColor
+            self.text.stringValue = down ? String(repeating: "ㅋ", count: min(n, 40)) : ""
+        }
     }
 }

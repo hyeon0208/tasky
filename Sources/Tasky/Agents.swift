@@ -139,8 +139,10 @@ struct AgentSession {
     /// 세션 제목(Claude Code 대화 기록의 custom-title/ai-title, F26). 없으면 폴더 이름
     var title: String?
     var transcript: String?
-    /// 마지막으로 사용자가 말을 건 시각(끝남 알림 기준, F26)
+    /// 마지막으로 사용자가 말을 건 시각(F26)
     var promptAt: Date?
+    /// 승인 대기일 때 무엇을 허락할지(F27): "Bash · rm -rf build" 또는 훅의 안내 문구
+    var ask: String?
 
     var folder: String { URL(fileURLWithPath: cwd).lastPathComponent }
     var name: String { title ?? "\(folder) · \(tool == "codex" ? "Codex" : "Claude")" }
@@ -170,25 +172,22 @@ enum SessionTitle {
     }
 }
 
-/// F26: '끝남'을 알릴지. 짧은 답이거나 그 터미널을 보고 있으면 알리지 않는다.
-enum DoneAlert {
-    /// F26 D4: 모아 둔 끝남 한 줄. 1개면 "X 작업이 끝났어요", 여럿이면 "그 사이 3개 끝났어요 · A, B"
-    static func summary(_ names: [String]) -> String {
-        var seen: [String] = []
-        for n in names where !seen.contains(n) { seen.append(n) }
-        if names.count == 1 { return "\(names[0]) 작업이 끝났어요" }
-        return "그 사이 \(names.count)개 끝났어요 · " + seen.prefix(2).joined(separator: ", ") + (seen.count > 2 ? " 외" : "")
-    }
+/// F27 피드백(2026-11-05): AI 작업 알림·목록·구슬은 꺼 둔다. 다시 켜려면 true
+enum AgentFeature { static let enabled = false }
 
-    static let key = "doneAlertSeconds"
-    static var minSeconds: Double {
-        get { UserDefaults.standard.object(forKey: key) as? Double ?? 10 }
-        set { UserDefaults.standard.set(max(0, newValue), forKey: key) }
-    }
-    static func shouldAnnounce(elapsed: TimeInterval?, minSeconds: Double, frontApp: String?, sessionApp: String?) -> Bool {
-        if let f = frontApp, let a = sessionApp, f == a { return false }
-        guard let elapsed else { return true }   // 시작 시각을 모르면(펫이 꺼져 있던 동안 등) 알린다
-        return elapsed >= minSeconds
+/// F27: 작업 알림 규칙. 패널은 사용자 승인이 필요할 때만 띄우고, 나머지는 상태 구슬·작업 목록에서 본다.
+enum AgentAlert {
+    static func showsPanel(_ state: AgentSession.State) -> Bool { state == .waiting }
+
+    /// 훅 입력에서 '무엇을 허락할지' 한 줄(명령은 앞 80자)
+    static func askText(_ e: [String: Any]) -> String? {
+        if let tool = e["tool_name"] as? String {
+            let input = e["tool_input"] as? [String: Any]
+            let detail = (input?["command"] ?? input?["file_path"] ?? input?["url"] ?? input?["description"]) as? String
+            guard let d = detail?.split(separator: "\n").first.map(String.init), !d.isEmpty else { return tool }
+            return "\(tool) · " + (d.count > 80 ? String(d.prefix(80)) + "…" : d)
+        }
+        return (e["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -223,12 +222,15 @@ final class AgentStore {
         switch event {
         case "SessionStart", "UserPromptSubmit", "PostToolUse":
             s.state = .working
+            s.ask = nil
             if event == "UserPromptSubmit" { s.promptAt = time }
         case "Notification":
             guard ["permission_prompt", "elicitation_dialog", "elicitation_url_dialog"].contains(e["notification_type"] as? String ?? "") else { return }
             s.state = .waiting
-        case "PermissionRequest":   // Codex: 승인을 물으려 함
+            s.ask = AgentAlert.askText(e) ?? s.ask
+        case "PermissionRequest":   // 승인을 물으려 함(도구·입력이 옴)
             s.state = .waiting
+            s.ask = AgentAlert.askText(e)
         case "Stop":
             s.state = .done
             s.seen = false

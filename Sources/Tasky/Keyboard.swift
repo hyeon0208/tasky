@@ -48,7 +48,8 @@ enum KeyEvent {
     case flags(code: Int64, flags: UInt64)
 }
 
-enum SwitchAction { case toggleInput, toggleCapsLock }
+/// `capsInstead`: 누를 때 바꾼 입력을 되돌리고 대문자 고정을 켜거나 끈다(Caps를 꾹 눌렀을 때)
+enum SwitchAction { case toggleInput, toggleCapsLock, capsInstead }
 
 /// 전환 키를 혼자 눌렀다 뗐는지, Caps Lock을 얼마나 눌렀는지 판단한다(순수).
 struct SwitchJudge {
@@ -67,27 +68,26 @@ struct SwitchJudge {
     mutating func tick(at t: Date) -> SwitchAction? {
         guard key == .capsLock, let p = pressedAt, !longFired, t.timeIntervalSince(p) >= Self.longPress else { return nil }
         longFired = true
-        return .toggleCapsLock
+        return .capsInstead
     }
 
     mutating func feed(_ e: KeyEvent, at t: Date) -> SwitchAction? {
         switch (key, e) {
         case (.capsLock, .down(let code, let isRepeat)) where code == key.keyCode:
-            // 새로 누름은 늘 처음부터(떼기를 놓쳤어도 다음 누름이 꼬이지 않게)
+            // F28: 누르는 순간 바로 전환(gksdud 방식). 빠르게 치면 Caps를 떼기 전에 다음 글자를 누르게 되는데,
+            // 떼기 기준이면 그 겹침 때문에 전환이 씹혔다. 꾹 누르면(0.5초) 전환을 되돌리고 대문자 고정
             if !isRepeat {
-                pressedAt = t; alone = true; longFired = false
-                return nil
+                pressedAt = t; longFired = false
+                return .toggleInput
             }
             return tick(at: t)
         case (.capsLock, .up(let code)) where code == key.keyCode:
             guard let p = pressedAt else { return nil }
             defer { pressedAt = nil }
             if longFired { return nil }
-            if t.timeIntervalSince(p) >= Self.longPress { return .toggleCapsLock }
-            return alone ? .toggleInput : nil
+            return t.timeIntervalSince(p) >= Self.longPress ? .capsInstead : nil
         case (.capsLock, _):
-            if pressedAt != nil { alone = false }
-            return nil
+            return nil   // 다른 키가 겹쳐도 이미 전환했다
         case (_, .flags(let code, let flags)) where code == key.keyCode:
             if flags & key.deviceMask != 0 {
                 // 다른 수정키(왼쪽 같은 키 포함)를 이미 누르고 있으면 전환하지 않는다
@@ -145,7 +145,24 @@ enum KeyMapping {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    static var current: [Entry]? { parse(hidutil(["property", "--get", "UserKeyMapping"])) }
+    /// F28: 키보드 장치에만(전체에 걸면 키보드를 다시 연결·깨울 때 새 장치에 빠지고, 수백 개 장치에 중복이 쌓였다)
+    static let keyboards = #"{"PrimaryUsagePage":1,"PrimaryUsage":6}"#
+
+    /// 키보드 장치별 출력에서 첫 장치의 목록만(장치마다 같은 값을 쓴다)
+    static func firstBlock(_ text: String) -> String {
+        guard let open = text.range(of: "(") else { return text }
+        guard let close = text.range(of: "\n)", range: open.upperBound..<text.endIndex) ?? text.range(of: ")", range: open.upperBound..<text.endIndex) else { return text }
+        return String(text[open.lowerBound..<close.upperBound])
+    }
+
+    static var current: [Entry]? { parse(firstBlock(hidutil(["property", "--matching", keyboards, "--get", "UserKeyMapping"]))) }
+
+    /// 키보드 중 우리 매핑이 빠진 장치가 있는지(재연결·잠자기 뒤)
+    static var missingOnSomeKeyboard: Bool {
+        let text = hidutil(["property", "--matching", keyboards, "--get", "UserKeyMapping"])
+        let blocks = text.components(separatedBy: "UserKeyMapping").dropFirst()
+        return blocks.contains { !$0.contains(String(f18)) }
+    }
 
     /// 우리가 더한 때만 기록해, 사용자가 직접 만든 같은 매핑은 지우지 않는다
     private static var mappedByUs: Bool {
@@ -156,11 +173,38 @@ enum KeyMapping {
     static func set(_ on: Bool) {
         if !on && !mappedByUs { return }
         guard let now = current else { return }
-        if on && now.contains(ours) { return }   // 이미 있음(사용자가 만든 것일 수 있음)
-        let next = on ? adding(now) : removing(now)
-        mappedByUs = on
+        if on && now.contains(ours) && !missingOnSomeKeyboard { return }   // 모든 키보드에 이미 있음
+        var next = on ? adding(now) : removing(now)
+        next = next.reduce(into: [Entry]()) { if !$0.contains($1) { $0.append($1) } }   // 중복 정리
+        if on { mappedByUs = true } else { mappedByUs = false }
         let json = try? JSONSerialization.data(withJSONObject: ["UserKeyMapping": next])
-        _ = hidutil(["property", "--set", String(data: json ?? Data(), encoding: .utf8) ?? "{}"])
+        _ = hidutil(["property", "--matching", keyboards, "--set", String(data: json ?? Data(), encoding: .utf8) ?? "{}"])
+    }
+
+    /// 키보드가 새로 붙거나(블루투스 재연결) Mac이 깨어나면 다시 건다
+    private static var notifyPort: IONotificationPortRef?
+    private static var iterator: io_iterator_t = 0
+    private static var wakeObserver: Any?
+    static func watchKeyboards(_ on: Bool) {
+        if !on {
+            if iterator != 0 { IOObjectRelease(iterator); iterator = 0 }
+            if let p = notifyPort { IONotificationPortDestroy(p); notifyPort = nil }
+            if let w = wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(w); wakeObserver = nil }
+            return
+        }
+        guard notifyPort == nil, let port = IONotificationPortCreate(kIOMainPortDefault) else { return }
+        notifyPort = port
+        CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(port).takeUnretainedValue(), .defaultMode)
+        let match = IOServiceMatching("IOHIDEventService")
+        let cb: IOServiceMatchingCallback = { _, it in
+            while case let s = IOIteratorNext(it), s != 0 { IOObjectRelease(s) }   // 비워야 다음 알림이 온다
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if KeySwitcher.shared.running { KeyMapping.set(true) } }
+        }
+        IOServiceAddMatchingNotification(port, kIOFirstMatchNotification, match, cb, nil, &iterator)
+        while case let s = IOIteratorNext(iterator), s != 0 { IOObjectRelease(s) }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { if KeySwitcher.shared.running { KeyMapping.set(true) } }
+        }
     }
 }
 
@@ -202,17 +246,20 @@ enum InputSources {
 
     static var available: Bool { pair(enabled.map(info)) != nil }
 
+    /// 한국어·영문 소스(전환 때마다 목록을 다시 읽지 않게 기억, 설정을 다시 적용하면 비움)
+    private static var cached: (ko: TISInputSource, en: TISInputSource)?
+    static func resetCache() { cached = nil }
+
     /// 지금이 한국어면 영문으로, 아니면 한국어로
     static func toggle() {
-        let sources = enabled
-        guard let p = pair(sources.map(info)),
-              let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
-        let toKo = nextIsKorean(reportedKorean: info(cur).languages.first == "ko", last: last, now: Date())
-        let target = toKo ? p.ko : p.en
-        if let s = sources.first(where: { info($0).id == target }) {
-            TISSelectInputSource(s)
-            last = (toKo, Date())
+        if cached == nil {
+            let sources = enabled
+            if let p = pair(sources.map(info)),
+               let ko = sources.first(where: { info($0).id == p.ko }), let en = sources.first(where: { info($0).id == p.en }) { cached = (ko, en) }
         }
+        guard let c = cached, let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
+        let toKo = nextIsKorean(reportedKorean: info(cur).languages.first == "ko", last: last, now: Date())
+        if TISSelectInputSource(toKo ? c.ko : c.en) == noErr { last = (toKo, Date()) } else { cached = nil }
     }
 
     /// 마지막으로 우리가 고른 소스와 시각
@@ -255,15 +302,21 @@ final class KeySwitcher {
         }
         guard InputSources.available else { return }   // 바꿀 소스가 없으면 Caps Lock도 건드리지 않는다
         judge = SwitchJudge(key: Self.key)
+        InputSources.resetCache()
         // 마우스 누름도 '다른 키'로 본다(⌘-클릭으로 전환되지 않게)
         let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
         let mask = types.reduce(0) { $0 | (1 << $1.rawValue) }
-        guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
+        // F28: 손쉬운 사용 권한이 있으면 '거르는' 감지(사용자 결정 2026-11-06). 전환을 마친 뒤에 다음 글자가 앱에 가므로
+        // 빠르게 칠 때 첫 글자가 이전 언어로 들어가는 일(씹힘)이 없다. 권한이 없으면 예전처럼 듣기만.
+        filtering = AXIsProcessTrusted()
+        guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: filtering ? .defaultTap : .listenOnly,
                                         eventsOfInterest: CGEventMask(mask), callback: { _, type, event, refcon in
-            if let refcon { Unmanaged<KeySwitcher>.fromOpaque(refcon).takeUnretainedValue().handle(type, event) }
-            return Unmanaged.passUnretained(event)
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let me = Unmanaged<KeySwitcher>.fromOpaque(refcon).takeUnretainedValue()
+            let swallow = me.handle(type, event)
+            return swallow ? nil : Unmanaged.passUnretained(event)
         }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return }
-        if Self.key == .capsLock { KeyMapping.set(true) }
+        if Self.key == .capsLock { KeyMapping.set(true); KeyMapping.watchKeyboards(true) }
         tap = t
         source = CFMachPortCreateRunLoopSource(nil, t, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -278,13 +331,19 @@ final class KeySwitcher {
         tap = nil
         source = nil
         running = false
+        KeyMapping.watchKeyboards(false)
         KeyMapping.set(false)
     }
 
-    private func handle(_ type: CGEventType, _ event: CGEvent) {
+    /// 거르는 감지인지(손쉬운 사용 권한이 있을 때)
+    private var filtering = false
+
+    /// 처리하고, 앱에 보내지 않을 이벤트면 true(거르는 감지에서 Caps→F18 키만 삼킨다. 다른 키는 그대로 보낸다)
+    @discardableResult
+    private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return
+            return false
         }
         let code = event.getIntegerValueField(.keyboardEventKeycode)
         let e: KeyEvent = switch type {
@@ -301,12 +360,15 @@ final class KeySwitcher {
                 self.act(self.judge.tick(at: Date()))
             }
         }
+        // F18(Caps)은 앱에 보내지 않는다(다른 앱이 F18을 받아 엉뚱한 동작을 하지 않게)
+        return filtering && judge.key == .capsLock && (type == .keyDown || type == .keyUp) && code == judge.key.keyCode
     }
 
     private func act(_ a: SwitchAction?) {
         switch a {
         case .toggleInput: InputSources.toggle()
         case .toggleCapsLock: Self.toggleCapsLock()
+        case .capsInstead: InputSources.toggle(); Self.toggleCapsLock()
         case nil: break
         }
     }

@@ -365,21 +365,21 @@ final class KeyTestField: NSStackView {
     }
 }
 
-/// 시계 말풍선 보이기 방식(모든 펫 공통, 기본: 항상)
+/// F27 받침대(알림 디스플레이) 보이기 방식(모든 펫 공통, 기본: 갖다대면)
 enum ClockMode: String, CaseIterable {
     case always, hover, off
     static let changed = Notification.Name("taskyClockModeChanged")
     var title: String {
         switch self {
         case .always: "항상"
-        case .hover: "커서를 올렸을 때"
-        case .off: "끄기"
+        case .hover: "갖다대면"
+        case .off: "안 봄"
         }
     }
     static var current: ClockMode {
-        get { ClockMode(rawValue: UserDefaults.standard.string(forKey: "clockMode") ?? "") ?? .always }
+        get { ClockMode(rawValue: UserDefaults.standard.string(forKey: "standMode") ?? "") ?? .hover }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "clockMode")
+            UserDefaults.standard.set(newValue.rawValue, forKey: "standMode")
             NotificationCenter.default.post(name: changed, object: nil)
         }
     }
@@ -401,21 +401,6 @@ enum ClockMode: String, CaseIterable {
         return String(format: "%@ %d:%02d", h < 12 ? "오전" : "오후", h % 12 == 0 ? 12 : h % 12, m) + sec
     }
 }
-
-/// 어두운 알약 + 아래 꼬리(시안의 말풍선)
-final class ClockBubble: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let body = CGRect(x: 0, y: 6, width: bounds.width, height: bounds.height - 6)
-        let path = NSBezierPath(roundedRect: body, xRadius: body.height / 2, yRadius: body.height / 2)
-        path.move(to: CGPoint(x: bounds.midX - 6, y: 6))
-        path.line(to: CGPoint(x: bounds.midX, y: 0))
-        path.line(to: CGPoint(x: bounds.midX + 6, y: 6))
-        path.close()
-        NSColor(white: 0.11, alpha: 0.85).setFill()
-        path.fill()
-    }
-}
-
 
 /// 누르면 동작하는 카드(설정 처음 화면)
 final class CardButton: NSView {
