@@ -241,6 +241,11 @@ final class AlertCard {
             NSSound(named: sound)?.play()
         }
 
+        // F26: '끝남'은 한 줄 알약(버튼 없음, 4초, 누르면 첫 동작 = 터미널로). 기다림·실패만 카드로
+        if state == .done {
+            showCompact(session: session, title: title, action: actions.first, near: petFrame, in: v, beside: beside)
+            return
+        }
         let width: CGFloat = 320
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -296,6 +301,44 @@ final class AlertCard {
             guard let self, let panel = self.panel else { return }
             if panel.frame.contains(NSEvent.mouseLocation) { self.shownAt = Date() }
             else if Date().timeIntervalSince(self.shownAt) > 8 { self.dismiss() }
+        }
+    }
+
+    private func showCompact(session: AgentSession, title: String, action: Action?, near petFrame: CGRect, in v: CGRect, beside: CGFloat) {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.lineBreakMode = .byTruncatingMiddle
+        label.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
+        let row = NSStackView(views: [session.badge(size: 18), label])
+        row.spacing = 6
+        row.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 12)
+        let size = row.fittingSize
+        let card = CardButton(frame: CGRect(origin: .zero, size: size))
+        card.onClick = { [weak self] in self?.dismiss(); action?.run() }
+        let effect = NSVisualEffectView(frame: card.bounds)
+        effect.material = .hudWindow; effect.state = .active
+        effect.wantsLayer = true; effect.layer?.cornerRadius = size.height / 2; effect.layer?.masksToBounds = true
+        effect.autoresizingMask = [.width, .height]
+        card.addSubview(effect)
+        row.frame = card.bounds
+        card.addSubview(row)
+        let shown = petFrame.intersection(v).isNull ? petFrame : petFrame.intersection(v)
+        var x = min(max(shown.midX - size.width / 2, v.minX + 8), v.maxX - size.width - 8)
+        var y = shown.maxY + 6 + size.height <= v.maxY ? shown.maxY + 6 : max(shown.minY - size.height - 6, v.minY + 8)
+        if beside != 0 {
+            x = beside > 0 ? shown.maxX + 6 : shown.minX - size.width - 6
+            y = min(max(shown.midY - size.height / 2, v.minY + 8), v.maxY - size.height - 8)
+        }
+        let p = FloatingPanel(size: size)
+        p.setFrame(CGRect(origin: CGPoint(x: x, y: y), size: size), display: false)
+        p.contentView = card
+        p.orderFrontRegardless()
+        panel = p
+        shownAt = Date()
+        timer = Ticker.every("끝남 알림 닫기", 0.5) { [weak self] _ in
+            guard let self, let panel = self.panel else { return }
+            if panel.frame.contains(NSEvent.mouseLocation) { self.shownAt = Date() }
+            else if Date().timeIntervalSince(self.shownAt) > 4 { self.dismiss() }
         }
     }
 

@@ -15,7 +15,7 @@ final class SettingsTabs: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static let sidebarWidth: CGFloat = 180
     static let width: CGFloat = 500          // 오른쪽 내용 폭
     static let size = CGSize(width: sidebarWidth + width, height: 520)
-    private let tabs: [SettingsTab]
+    private var tabs: [SettingsTab]
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private let title = NSTextField(labelWithString: "")
@@ -30,6 +30,9 @@ final class SettingsTabs: NSView, NSTableViewDataSource, NSTableViewDelegate {
     init(tabs: [SettingsTab]) {
         self.tabs = tabs
         super.init(frame: CGRect(origin: .zero, size: Self.size))
+        // F26 I: 맨 위 '처음' = 기능 카드(누르면 그 탭으로). 개발자·정보는 카드에 넣지 않는다
+        let features = tabs.filter { $0.id != "debug" && $0.id != "about" }
+        self.tabs.insert(SettingsTab(id: "home", title: "처음", symbol: "square.grid.3x3.fill", content: homeCards(features)), at: 0)
         // 왼쪽 목록
         let side = NSVisualEffectView(frame: CGRect(x: 0, y: 0, width: Self.sidebarWidth, height: Self.size.height))
         side.material = .sidebar
@@ -68,6 +71,50 @@ final class SettingsTabs: NSView, NSTableViewDataSource, NSTableViewDelegate {
         select(tabs.firstIndex { $0.id == Self.lastTab } ?? 0)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 3열 카드: 색 아이콘 + 이름 + 한 줄 설명
+    private func homeCards(_ features: [SettingsTab]) -> NSView {
+        let cards: [NSView] = features.map { t in
+            let card = CardButton()
+            card.onClick = { [weak self] in
+                guard let self, let i = self.tabs.firstIndex(where: { $0.id == t.id }) else { return }
+                self.select(i)
+            }
+            card.wantsLayer = true
+            card.layer?.cornerRadius = 12
+            card.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+            let tile = NSView(); tile.wantsLayer = true; tile.layer?.cornerRadius = 7; tile.layer?.backgroundColor = Self.tint(t.id).cgColor
+            let icon = NSImageView(image: NSImage(systemSymbolName: t.symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 14, weight: .semibold)) ?? NSImage())
+            icon.contentTintColor = .white
+            let name = NSTextField(labelWithString: t.title); name.font = .systemFont(ofSize: 13, weight: .semibold)
+            let desc = NSTextField(wrappingLabelWithString: Self.blurb[t.id] ?? ""); desc.font = .systemFont(ofSize: 11); desc.textColor = .secondaryLabelColor
+            for v in [tile, icon, name, desc] { v.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(v) }
+            NSLayoutConstraint.activate([
+                card.widthAnchor.constraint(equalToConstant: 140), card.heightAnchor.constraint(equalToConstant: 104),
+                tile.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12), tile.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                tile.widthAnchor.constraint(equalToConstant: 28), tile.heightAnchor.constraint(equalToConstant: 28),
+                icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor), icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+                name.leadingAnchor.constraint(equalTo: tile.leadingAnchor), name.topAnchor.constraint(equalTo: tile.bottomAnchor, constant: 8),
+                desc.leadingAnchor.constraint(equalTo: tile.leadingAnchor), desc.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+                desc.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 2),
+            ])
+            return card
+        }
+        let rows = stride(from: 0, to: cards.count, by: 3).map { i -> NSView in
+            let r = NSStackView(views: Array(cards[i..<min(i + 3, cards.count)])); r.spacing = 12; return r
+        }
+        let col = NSStackView(views: rows)
+        col.orientation = .vertical; col.alignment = .leading; col.spacing = 12
+        col.edgeInsets = NSEdgeInsets(top: 4, left: 24, bottom: 20, right: 24)
+        return col
+    }
+
+    static let blurb: [String: String] = [
+        "general": "보이는 방식·원형 메뉴·움직임", "pet": "이 곰의 모양·크기", "alerts": "작업이 끝나거나 기다릴 때",
+        "keyboard": "한영 전환 키", "clipboard": "복사한 것 다시 쓰기", "snap": "창을 반·4분의 1로",
+        "capture": "영역·창 찍기, 글자 인식", "tasks": "미리 알림·캘린더, 빠른 실행",
+    ]
 
     func select(_ i: Int) {
         Self.lastTab = tabs[i].id
@@ -128,12 +175,15 @@ final class SettingsTabs: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private static func tint(_ id: String) -> NSColor {
         switch id {
+        case "home": .systemPink
         case "general": .systemGray
         case "pet": .systemOrange
         case "alerts": .systemRed
         case "keyboard": .systemBlue
         case "clipboard": .systemTeal
         case "snap": .systemIndigo
+        case "capture": .systemPurple
+        case "tasks": .systemGreen
         case "debug": .systemBrown
         default: .systemGray
         }
@@ -364,4 +414,12 @@ final class ClockBubble: NSView {
         NSColor(white: 0.11, alpha: 0.85).setFill()
         path.fill()
     }
+}
+
+
+/// 누르면 동작하는 카드(설정 처음 화면)
+final class CardButton: NSView {
+    var onClick: () -> Void = {}
+    override func mouseUp(with event: NSEvent) { if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick() } }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }

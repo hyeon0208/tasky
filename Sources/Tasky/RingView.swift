@@ -7,6 +7,8 @@ struct Slot {
     var badge: Int? = nil
     /// 칸 순서 저장용 이름(F21). 빈 문자열이면 옮길 수 없는 칸
     var id = ""
+    /// F26: 아이콘 색(없으면 기본 글자색)
+    var color: NSColor? = nil
     let action: () -> Void
 }
 
@@ -41,6 +43,9 @@ final class RingView: NSView {
     var onClose: () -> Void = {}
     /// 칸을 옮기면 새 id 순서(F21). nil이면 옮기기 없음(드롭 변환 링)
     var onReorder: (([String]) -> Void)?
+    /// F26: 칸마다 이름표를 늘 보여 준다(펫 바깥쪽으로)
+    var alwaysLabels = false
+    private var labels: [GlassLabel] = []
     private var hovered: Int? { didSet { if hovered != oldValue { hoverChanged(from: oldValue) } } }
     private let radius: CGFloat = 25
     private var buttons: [GlassButton] = []
@@ -58,13 +63,33 @@ final class RingView: NSView {
     private func build() {
         buttons.forEach { $0.removeFromSuperview() }
         buttons = centers.enumerated().map { i, c in
-            let b = GlassButton(diameter: radius * 2, symbol: slots[i].symbol, title: slots[i].title, accent: slots[i].id == "status" || (slots[i].id.isEmpty && i == 0), badge: slots[i].badge)
+            let b = GlassButton(diameter: radius * 2, symbol: slots[i].symbol, title: slots[i].title, accent: slots[i].id == "status" || (slots[i].id.isEmpty && i == 0), badge: slots[i].badge, color: slots[i].color)
             b.frame = CGRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2)
             addSubview(b)
             return b
         }
         label.isHidden = true
         addSubview(label)
+        placeLabels()
+    }
+
+    /// 칸 이름표: 펫 가운데에서 칸 쪽으로 뻗은 방향의 바깥에 둔다(이웃 칸끼리 겹치지 않게)
+    private func placeLabels() {
+        labels.forEach { $0.removeFromSuperview() }
+        labels = []
+        guard alwaysLabels, let o = origin else { return }
+        for (i, c) in centers.enumerated() {
+            let l = GlassLabel(small: true)
+            l.text = slots[i].title
+            let s = l.fittingSize
+            let dx = c.x - o.x, dy = c.y - o.y, d = max(hypot(dx, dy), 1)
+            let reach = radius + 6 + max(s.width, s.height * 2) / 2
+            let p = CGPoint(x: c.x + dx / d * reach, y: c.y + dy / d * reach)
+            l.frame = CGRect(x: min(max(p.x - s.width / 2, 2), bounds.width - s.width - 2),
+                             y: min(max(p.y - s.height / 2, 2), bounds.height - s.height - 2), width: s.width, height: s.height)
+            addSubview(l)
+            labels.append(l)
+        }
     }
 
     /// 펫 쪽에서 살짝 작고 투명하게 시작해 제자리로(0.22초, 25ms 간격). 동작 줄이기면 나타나기만.
@@ -102,6 +127,7 @@ final class RingView: NSView {
         if let old, old < buttons.count { buttons[old].highlighted = false }
         guard let i = hovered, i < buttons.count else { label.isHidden = true; return }
         buttons[i].highlighted = true
+        if alwaysLabels && lifted == nil { label.isHidden = true; return }   // 이름표가 이미 칸마다 있다
         label.text = slots[i].title
         let s = label.fittingSize
         let c = lifted == i ? cursor : centers[i]   // 든 칸은 이름표가 따라간다
@@ -312,7 +338,7 @@ final class RingView: NSView {
 private let systemGlass = NSClassFromString("NSGlassEffectView") as? NSView.Type
 
 /// 유리 바탕: 시스템 유리가 있으면 그것, 없으면 뒤 흐림
-private func makeGlass(cornerRadius: CGFloat, frame: CGRect) -> NSView {
+func makeGlass(cornerRadius: CGFloat, frame: CGRect) -> NSView {
     if let cls = systemGlass {
         let g = cls.init(frame: frame)
         g.setValue(cornerRadius, forKey: "cornerRadius")
@@ -335,8 +361,12 @@ final class GlassButton: NSView {
     private let accent: Bool
     var highlighted = false { didSet { update(animated: true) } }
 
-    init(diameter d: CGFloat, symbol: String, title: String, accent: Bool, badge: Int?) {
+    /// F26: 아이콘 색. 있으면 밝은 유리에 색 아이콘(시안), 없으면 예전처럼 어두운 유리에 흰 아이콘
+    private let color: NSColor?
+
+    init(diameter d: CGFloat, symbol: String, title: String, accent: Bool, badge: Int?, color: NSColor? = nil) {
         self.accent = accent
+        self.color = color
         super.init(frame: CGRect(x: 0, y: 0, width: d, height: d))
         wantsLayer = true
         layer?.shadowColor = NSColor.black.cgColor
@@ -399,7 +429,7 @@ final class GlassButton: NSView {
         let icon = NSImageView(frame: bounds)
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
             .withSymbolConfiguration(.init(pointSize: 18, weight: .semibold).applying(.preferringHierarchical()))
-        icon.contentTintColor = .white   // 시안: 흰 아이콘 + 아래 그림자
+        icon.contentTintColor = color ?? .white   // 시안: 흰 아이콘 + 아래 그림자 / F26: 밝은 유리에 색 아이콘
         icon.imageScaling = .scaleNone
         icon.shadow = {
             let sh = NSShadow()
@@ -456,8 +486,12 @@ final class GlassButton: NSView {
         CATransaction.begin()
         CATransaction.setAnimationDuration(animated ? 0.15 : 0)
         // 흰 아이콘이 읽히도록 어두운 유리로 칠한다(불투명할수록 진하게). 첫 칸은 따뜻한 빛만 살짝.
-        tint.backgroundColor = (accent ? NSColor(red: 0.30, green: 0.20, blue: 0.08, alpha: alpha * 0.9)
-                                       : NSColor(white: 0.1, alpha: alpha * 0.9)).cgColor
+        if color != nil {   // F26: 밝은 유리(색 아이콘이 읽히게 흰빛을 얹는다)
+            tint.backgroundColor = NSColor(white: 1, alpha: min(0.92, 0.35 + alpha * 0.55)).cgColor
+        } else {
+            tint.backgroundColor = (accent ? NSColor(red: 0.30, green: 0.20, blue: 0.08, alpha: alpha * 0.9)
+                                           : NSColor(white: 0.1, alpha: alpha * 0.9)).cgColor
+        }
         CATransaction.commit()
         guard let layer else { return }
         // 올리면 1.08배로 커지고 2pt 떠오른다
@@ -503,7 +537,7 @@ final class RingPreview: NSView {
 
     func refresh() {
         buttons.forEach { $0.removeFromSuperview() }
-        buttons = [("folder", "폴더 서랍"), ("bell", "싱잉볼"), ("gearshape", "설정")].enumerated().map { i, item in
+        buttons = [("checklist.checked", "할 일"), ("bolt.fill", "빠른 실행"), ("gearshape.fill", "설정")].enumerated().map { i, item in
             let b = GlassButton(diameter: 50, symbol: item.0, title: item.1, accent: false, badge: i == 0 ? 2 : nil)
             b.frame.origin = CGPoint(x: 25 + CGFloat(i) * 60, y: 13)
             addSubview(b)
@@ -518,9 +552,9 @@ private final class GlassLabel: NSView {
     private var glass: NSView?
     var text = "" { didSet { field.stringValue = text; needsLayout = true } }
 
-    init() {
+    init(small: Bool = false) {
         super.init(frame: .zero)
-        field.font = .systemFont(ofSize: 12, weight: .semibold)
+        field.font = .systemFont(ofSize: small ? 11 : 12, weight: .semibold)
         field.textColor = .labelColor
         addSubview(field)
     }

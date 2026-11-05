@@ -206,7 +206,7 @@ final class BeadsView: NSView {
 /// 설정: 작업 구슬 보이기(모든 펫 공통, 기본 켜짐)
 enum BeadsSetting {
     static var on: Bool {
-        get { UserDefaults.standard.object(forKey: "beadsOn") as? Bool ?? true }
+        get { false }   // F26: 큰 작업 구슬은 꺼 둔다(머리 위 칩으로 대신, 코드는 남김). 예전 값: beadsOn, 기본 true
         set {
             UserDefaults.standard.set(newValue, forKey: "beadsOn")
             NotificationCenter.default.post(name: ClockMode.changed, object: nil)

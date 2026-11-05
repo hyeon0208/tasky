@@ -136,9 +136,59 @@ struct AgentSession {
     var app: String?
     var seen = true
     var whileOff = false
+    /// 세션 제목(Claude Code 대화 기록의 custom-title/ai-title, F26). 없으면 폴더 이름
+    var title: String?
+    var transcript: String?
+    /// 마지막으로 사용자가 말을 건 시각(끝남 알림 기준, F26)
+    var promptAt: Date?
 
-    var name: String {
-        "\(URL(fileURLWithPath: cwd).lastPathComponent) · \(tool == "codex" ? "Codex" : "Claude")"
+    var folder: String { URL(fileURLWithPath: cwd).lastPathComponent }
+    var name: String { title ?? "\(folder) · \(tool == "codex" ? "Codex" : "Claude")" }
+    /// 알림 문구용 짧은 이름: "플레이리스트 개발"
+    var shortName: String { title ?? folder }
+}
+
+/// F26: Claude Code 대화 기록 끝에서 세션 제목을 읽는다(읽기만). 사용자가 바꾼 이름(custom-title)이 먼저.
+enum SessionTitle {
+    static func read(_ path: String, tail: Int = 65536) -> String? {
+        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        let size = (try? h.seekToEnd()) ?? 0
+        try? h.seek(toOffset: size > UInt64(tail) ? size - UInt64(tail) : 0)
+        guard let data = try? h.readToEnd(), case let text = String(decoding: data, as: UTF8.self) else { return nil }
+        var custom: String?, ai: String?
+        for line in text.split(separator: "\n") where line.contains("-title\"") {
+            guard let o = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { continue }
+            switch o["type"] as? String {
+            case "custom-title": custom = (o["customTitle"] ?? o["title"]) as? String ?? custom
+            case "ai-title": ai = (o["aiTitle"] ?? o["title"]) as? String ?? ai
+            default: break
+            }
+        }
+        let t = (custom ?? ai)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t?.isEmpty == false ? t : nil
+    }
+}
+
+/// F26: '끝남'을 알릴지. 짧은 답이거나 그 터미널을 보고 있으면 알리지 않는다.
+enum DoneAlert {
+    /// F26 D4: 모아 둔 끝남 한 줄. 1개면 "X 작업이 끝났어요", 여럿이면 "그 사이 3개 끝났어요 · A, B"
+    static func summary(_ names: [String]) -> String {
+        var seen: [String] = []
+        for n in names where !seen.contains(n) { seen.append(n) }
+        if names.count == 1 { return "\(names[0]) 작업이 끝났어요" }
+        return "그 사이 \(names.count)개 끝났어요 · " + seen.prefix(2).joined(separator: ", ") + (seen.count > 2 ? " 외" : "")
+    }
+
+    static let key = "doneAlertSeconds"
+    static var minSeconds: Double {
+        get { UserDefaults.standard.object(forKey: key) as? Double ?? 10 }
+        set { UserDefaults.standard.set(max(0, newValue), forKey: key) }
+    }
+    static func shouldAnnounce(elapsed: TimeInterval?, minSeconds: Double, frontApp: String?, sessionApp: String?) -> Bool {
+        if let f = frontApp, let a = sessionApp, f == a { return false }
+        guard let elapsed else { return true }   // 시작 시각을 모르면(펫이 꺼져 있던 동안 등) 알린다
+        return elapsed >= minSeconds
     }
 }
 
@@ -165,6 +215,7 @@ final class AgentStore {
         var s = sessions[key] ?? AgentSession(id: key, tool: tool, cwd: e["cwd"] as? String ?? "?", state: .working, updated: time)
         if let cwd = e["cwd"] as? String { s.cwd = cwd }
         if let app = (e["tasky_app"] ?? e["kongpod_app"]) as? String { s.app = app }
+        if let t = e["transcript_path"] as? String { s.transcript = t }
         s.updated = time
         s.whileOff = offline
 
@@ -172,6 +223,7 @@ final class AgentStore {
         switch event {
         case "SessionStart", "UserPromptSubmit", "PostToolUse":
             s.state = .working
+            if event == "UserPromptSubmit" { s.promptAt = time }
         case "Notification":
             guard ["permission_prompt", "elicitation_dialog", "elicitation_url_dialog"].contains(e["notification_type"] as? String ?? "") else { return }
             s.state = .waiting
@@ -191,11 +243,16 @@ final class AgentStore {
         default:
             return
         }
+        if s.state != .working, let t = s.transcript, let title = SessionTitle.read(t) { s.title = title }
         sessions[key] = s
         onChange(before == s.state && event != "Stop" ? nil : s)
     }
 
-    func markSeen() { for k in sessions.keys where sessions[k]!.state != .working { sessions[k]!.seen = true } }
+    /// 본 것으로 친다. `tool`로 이 펫이 받는 도구만 고르고, 다른 펫·알약·메뉴 막대도 바로 다시 그리게 알린다
+    func markSeen(_ accepts: (String) -> Bool = { _ in true }) {
+        for k in sessions.keys where sessions[k]!.state != .working && accepts(sessions[k]!.tool) { sessions[k]!.seen = true }
+        onChange(nil)
+    }
 
     func remove(_ id: String) { sessions[id] = nil; onChange(nil) }
 

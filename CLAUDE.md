@@ -10,24 +10,8 @@ macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없�
 - 훅 연결: `.build/debug/Tasky --connect|--disconnect claude|codex` (`TASKY_HOME`으로 실제 설정 대신 임시 폴더 사용 가능)
 - 실행: `.build/debug/Tasky` (메뉴 막대 잎 아이콘 → 종료). `--debug`를 붙이면 설정에 '개발자' 탭(CPU·메모리·화면 갱신·애니메이션·타이머, CSV 기록)
 
-## 구조
-- `PetController.swift`: 펫 한 마리(위치·빼꼼·링·서랍·알림·설정 창), `App`(펫 목록·메뉴 막대·훅 서버), `LoginItem`
-- `Pet3D.swift`: 3D 곰(F18) — 스프링·상황별 자세(`BearMotion`)·도형 곰·`Pet3DView`(SceneKit). 모습 확인은 `Tasky --render-bear <폴더>`
-- `PetView.swift`: 2D 그리기만(나중에 3D로 교체할 자리). `FloatingPanel`: 포커스를 뺏지 않는 투명 패널
-- `Geometry.swift`: 빼꼼·링 칸 위치 계산 + `SelfTest`
-- `SettingsView.swift`: 설정 창(왼쪽 목록 + 카드, F19)·키보드 바로 테스트 칸 (F13)
-- `RingView.swift`: 원형 메뉴, `Drawer.swift`: 폴더 서랍(NSBrowser 칼럼), `Converter.swift`: 드롭 변환
-- `Character.swift`: 캐릭터 그림(영어·한국어 이름, 대신 규칙), 효과, 상황 → 반응 표, 찌르기·던지기 판정 (F11)
-- `Keyboard.swift`: 한영 전환 키(판정·hidutil Caps→F18·듣기 전용 탭·입력 소스)와 키 반복 값 (F12)
-- `WindowSnap.swift`: 창 정리(동작·영역 계산·AX 창 읽기/쓰기·겹침 확인·끌어 맞추기, 바탕화면 보기) (F15)
-- `Capture.swift`: 화면 캡처(screencapture 호출·권한·저장·단축키)와 미리보기 (F22)
-- `CaptureEditor.swift`: 캡처 편집 창(도형·그리기·되돌리기), 글자 인식, 화면에 고정 (F22)
-- `Clipboard.swift`: 클립보드 기록(감시·저장·⌘⇧C 단축키·기록 창) (F16)
-- `Beads.swift`: 작업 구슬(세션·변환 → 구슬 목록, 펫 위 자식 패널) (F14)
-- `Debug.swift`: `--debug` 개발자 옵션, 이름 붙은 타이머 `Ticker`(새 타이머는 이것으로 만든다), `PerfSampler` (F17)
-- `Agents.swift`: 훅 클라이언트·소켓 서버·세션 상태·훅 설치, `AgentPanel.swift`: 알림 목록·메시지 창
-
 ## 규칙
+- 새 타이머는 `Ticker`(Debug.swift)로 만든다(개발자 탭에서 이름으로 보이게).
 - 펫과 패널은 포커스를 뺏지 않는다(비활성 패널). 전역 키보드 감지·손쉬운 사용 권한을 쓰지 않는다. 예외: F12 한영 전환 키(입력 모니터링만), F15 창 정리(손쉬운 사용 권한, 사용자 결정 2026-10-28), F22 화면 캡처(화면 기록 권한, 사용자 결정 2026-10-30). 모두 사용자가 켰을 때만 요청하고, 키를 저장·전송하지 않음.
 - 변환은 원본을 바꾸지 않고 `이름 (깍지).확장자`로 새로 만든다. 서랍의 삭제는 휴지통으로만.
 - 사용자 설정 파일(~/.claude, ~/.codex)은 백업 후 우리 항목만 바꾼다.
@@ -43,3 +27,4 @@ macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없�
 - SwiftUI 뷰 본문에서 상태를 바꾸면 무한 갱신으로 멈출 수 있다(북마크 해석 중 저장). 무거운 해석은 한 번만 하고 캐시한다.
 - 시스템 값의 단위·적용 시점을 추정으로 정하지 않는다. 지금 값을 읽어 확인한다(키 반복 단위를 15ms로 잘못 잡았고, 전역 값은 로그아웃 뒤에만 적용됨).
 - 빌드 결과를 grep으로 거르고 이어서 자체 검사·커밋하면, 빌드가 실패해도 예전 실행 파일로 검사가 통과해 깨진 코드가 커밋된다. `swift build`의 종료 코드로 확인한 뒤 커밋한다.
+- 입력 중에 입력칸이 든 창 내용(contentView)을 다시 만들지 않는다. 포커스·한글 조합이 끊겨 타이핑이 안 된다(F26 빠른 실행).

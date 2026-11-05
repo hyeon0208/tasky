@@ -26,6 +26,8 @@ final class FloatingPanel: NSPanel {
 
 protocol PetViewDelegate: AnyObject {
     func petClicked()
+    /// F26: 두 번 누르기 → 빠른 실행
+    func petDoubleClicked()
     /// delta: 누른 곳부터 지금 커서까지(누적)
     func petDragged(by delta: CGVector)
     func petDragEnded()
@@ -57,6 +59,9 @@ final class PetView: NSView {
         var dots: [NSColor] = [], extra = 0
         var clock = "", line = "", lineColor: NSColor = .white
         var border: NSColor?
+        /// F26: 접힌 가로 알약에 칩, 라이트·다크
+        var glance = Glance()
+        var dark = true
     }
     var island: Island? {
         didSet {
@@ -115,6 +120,8 @@ final class PetView: NSView {
 
     /// 몸 안의 콩알(작업 상태 색). 최대 5개.
     var beans: [NSColor] = [] { didSet { needsDisplay = true } }
+    /// F26 5차: AI 작업 유리 배지(곰 오른쪽 아래 발치). nil이면 숨김. 알약일 때는 알약이 점으로 보여 준다
+    let agentBadge = AgentBadgeView(frame: .zero)
     /// 펫마다 다른 몸 색: 민트·살구·라일락·크림
     var bodyColor = PetView.defaultColors[0] { didSet { needsDisplay = true } }
     static let defaultColors: [NSColor] = [
@@ -160,6 +167,11 @@ final class PetView: NSView {
         faceLayer.position = CGPoint(x: r.width / 2, y: r.height / 2 - r.height * Self.floor)
         let e = bounds.width * 0.26
         effectLayer.frame = CGRect(x: bounds.width * 0.7, y: bounds.height * 0.72, width: e, height: e)
+        if agentBadge.superview !== self { addSubview(agentBadge); agentBadge.layer?.zPosition = 20 }
+        // F26 6차 P4: 곰 몸을 가리지 않게 오른쪽 아래 발치(바닥 높이)에 작게 둔다
+        let b = max(24, min(36, bounds.width * 0.22))
+        agentBadge.frame = CGRect(x: bounds.maxX - b, y: 0, width: b, height: b)
+        agentBadge.alphaValue = island == nil ? 1 : 0
         CATransaction.commit()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -252,8 +264,10 @@ final class PetView: NSView {
     private func drawIsland(_ i: Island) {
         let r = bounds.insetBy(dx: 1, dy: 1), radius = min(r.width, r.height, 44) / 2
         let pill = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
-        NSColor(white: 0.08, alpha: 0.94).setFill()
+        (i.dark ? NSColor(white: 0.08, alpha: 0.94) : NSColor(white: 1, alpha: 0.97)).setFill()
         pill.fill()
+        if !i.dark { NSColor(white: 0, alpha: 0.08).setStroke(); pill.lineWidth = 1; pill.stroke() }
+        let ink = i.dark ? NSColor.white : NSColor(white: 0.1, alpha: 1)
         if let b = i.border { b.setStroke(); pill.lineWidth = 2; pill.stroke() }
         let icon = iconRect
         if i.expanded {
@@ -261,11 +275,16 @@ final class PetView: NSView {
             let para = NSMutableParagraphStyle()
             para.lineBreakMode = .byTruncatingTail
             NSAttributedString(string: i.clock, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold),
-                                                            .foregroundColor: NSColor.white])
+                                                            .foregroundColor: ink])
                 .draw(in: CGRect(x: x, y: bounds.midY + 1, width: w, height: 20))
             NSAttributedString(string: i.line, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
                                                            .foregroundColor: i.lineColor, .paragraphStyle: para])
                 .draw(in: CGRect(x: x, y: bounds.midY - 17, width: w, height: 15))
+            return
+        }
+        // F26: 가로 알약은 칩 줄(할 일 수·다음 일정·상태 점)
+        if !i.vertical {
+            GlanceChips.draw(i.glance, at: CGPoint(x: icon.maxX + 6, y: bounds.midY - GlanceChips.height / 2), dark: i.dark)
             return
         }
         let d: CGFloat = 6, step: CGFloat = 10
@@ -321,9 +340,10 @@ final class PetView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if dragging { delegate?.petDragEnded() } else { delegate?.petClicked() }
-        downPoint = nil
-        dragging = false
+        defer { downPoint = nil; dragging = false }
+        if dragging { delegate?.petDragEnded(); return }
+        // 한 번은 바로 처리하고(기다림 없음), 두 번째 누르기가 오면 빠른 실행이 앞 것을 닫고 연다
+        if event.clickCount >= 2 { delegate?.petDoubleClicked() } else { delegate?.petClicked() }
     }
 
     // MARK: 호버와 쓰다듬기

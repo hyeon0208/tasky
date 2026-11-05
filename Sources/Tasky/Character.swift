@@ -45,6 +45,7 @@ final class Character {
     static let names: [String: String] = [
         "chick": "병아리", "capybara": "카피바라", "hamster": "햄스터", "seal": "물범", "blueshark": "파란 상어",
         "shiba": "시바", "cat": "고양이", "grayshark": "회색 상어", "bird": "새",
+        "doodlebear": "낙서 곰", "longcat": "길쭉 냥이",   // F26
     ]
     static func root(_ base: URL = Paths.support) -> URL { base.appendingPathComponent("Characters") }
 

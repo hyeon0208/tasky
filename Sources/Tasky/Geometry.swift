@@ -54,9 +54,9 @@ enum Geometry {
     }
 
     /// F20 빼꼼 아일랜드: 붙은 펫 창이 되는 알약. 옆·구석은 세로, 아래는 가로.
-    static func islandSize(dock: Dock, expanded: Bool) -> CGSize {
+    static func islandSize(dock: Dock, expanded: Bool, chips: CGFloat = 0) -> CGSize {
         switch (dock == .bottom || dock == .top, expanded) {
-        case (true, false): CGSize(width: 96, height: 30)
+        case (true, false): CGSize(width: max(96, 40 + chips + 12), height: 30)   // F26: 칩만큼 길어진다
         case (true, true): CGSize(width: 240, height: 64)
         case (false, false): CGSize(width: 30, height: 96)
         case (false, true): CGSize(width: 210, height: 112)
@@ -64,9 +64,9 @@ enum Geometry {
     }
 
     /// 화면 끝에서 4pt 안쪽. 펼쳐도 같은 끝에 붙은 채 안쪽으로 커진다. `center`는 붙기 전 펫 가운데(끝을 따라가는 자리).
-    static func islandFrame(dock: Dock, expanded: Bool, center c: CGPoint, in v: CGRect) -> CGRect {
+    static func islandFrame(dock: Dock, expanded: Bool, center c: CGPoint, in v: CGRect, chips: CGFloat = 0) -> CGRect {
         let inset: CGFloat = 4
-        var s = islandSize(dock: dock, expanded: expanded)
+        var s = islandSize(dock: dock, expanded: expanded, chips: chips)
         s = CGSize(width: min(s.width, v.width - inset * 2), height: min(s.height, v.height - inset * 2))
         let clampX = min(max(c.x - s.width / 2, v.minX + inset), v.maxX - inset - s.width)
         let clampY = min(max(c.y - s.height / 2, v.minY + inset), v.maxY - inset - s.height)
@@ -634,6 +634,139 @@ enum SelfTest {
         check(KeyRepeat.original(stored: nil, current: 15) == 15 && KeyRepeat.original(stored: 15, current: 10) == 15
               && KeyRepeat.original(stored: nil, current: nil) == -1, "원래 값은 처음 한 번만")
         check(KeyRepeat.restoreValue(-1) == nil && KeyRepeat.restoreValue(15) == 15, "원래 없었으면 지운다")
+
+        // F24 QuickParse (기준: 2026-11-03 화 10:00)
+        do {
+            var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Seoul")!
+            let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 10))!
+            func d(_ m: Int, _ day: Int, _ h: Int = 0, _ mi: Int = 0, y: Int = 2026) -> Date {
+                cal.date(from: DateComponents(year: y, month: m, day: day, hour: h, minute: mi))!
+            }
+            let cases: [(String, QuickParse.Result)] = [
+                ("내일 3시 치과", .init(title: "치과", date: d(11, 4, 15), hasTime: true)),
+                ("오전 9시 반 회의", .init(title: "회의", date: d(11, 4, 9, 30), hasTime: true)),   // 오늘 그 시각이 지났으면 내일
+                ("오늘 오전 9시 회의", .init(title: "회의", date: d(11, 3, 9), hasTime: true)),   // 날을 쓰면 그대로
+                ("3시간 운동", .init(title: "3시간 운동", date: nil, hasTime: false)),
+                ("3시 반찬 만들기", .init(title: "반찬 만들기", date: d(11, 3, 15), hasTime: true)),
+                ("밤 12시 정리", .init(title: "정리", date: d(11, 4, 0), hasTime: true)),
+                ("내일배움카드 신청", .init(title: "내일배움카드 신청", date: nil, hasTime: false)),
+                ("모레 장보기", .init(title: "장보기", date: d(11, 5), hasTime: false)),
+                ("다음 주 금요일 저녁 7시 저녁 약속", .init(title: "저녁 약속", date: d(11, 13, 19), hasTime: true)),
+                ("금요일 보고서", .init(title: "보고서", date: d(11, 6), hasTime: false)),
+                ("12월 1일 생일", .init(title: "생일", date: d(12, 1), hasTime: false)),
+                ("11/20 마감", .init(title: "마감", date: d(11, 20), hasTime: false)),
+                ("3월 2일 개학", .init(title: "개학", date: d(3, 2, y: 2027), hasTime: false)),
+                ("3일 뒤 택배", .init(title: "택배", date: d(11, 6), hasTime: false)),
+                ("14:30 통화", .init(title: "통화", date: d(11, 3, 14, 30), hasTime: true)),
+                ("밤 11시 20분 정리", .init(title: "정리", date: d(11, 3, 23, 20), hasTime: true)),
+                ("10시 산책", .init(title: "산책", date: d(11, 3, 10), hasTime: true)),
+                ("책 읽기", .init(title: "책 읽기", date: nil, hasTime: false)),
+            ]
+            for (text, want) in cases {
+                let got = QuickParse.parse(text, now: now, calendar: cal)
+                check(got == want, "QuickParse \(text): \(got)")
+            }
+            // 묶음 나누기·알릴 항목 고르기
+            func it(_ id: String, _ date: Date?, time: Bool = true) -> TaskItem { TaskItem(id: id, title: id, date: date, hasTime: time, isEvent: false) }
+            let items = [it("어제", d(11, 2, 9)), it("오늘", d(11, 3, 20)), it("내일", d(11, 4, 9)), it("없음", nil, time: false),
+                         it("곧", now.addingTimeInterval(30)), it("지남", now.addingTimeInterval(-30)), it("날만", d(11, 3), time: false)]
+            let g = TaskLogic.groups(items, now: now, calendar: cal)
+            check(g.today.map(\.id) == ["어제", "날만", "지남", "곧", "오늘"], "할 일 묶음: 오늘(지난 것 포함, 시간 순) \(g.today.map(\.id))")
+            check(g.upcoming.map(\.id) == ["내일"] && g.undated.map(\.id) == ["없음"], "할 일 묶음: 다가오는 일·날짜 없음")
+            var ev = it("일정", d(11, 3, 11)); ev.isEvent = true
+            check(TaskLogic.pending(items + [ev], now: now, calendar: cal).map(\.id) == ["어제", "날만", "지남", "곧", "오늘", "없음"],
+                  "남은 할 일: 오늘·날짜 없음, 일정·내일 제외")
+            check(TaskLogic.due(items, now: now, alerted: []).map(\.id) == ["곧", "지남"], "알릴 항목: 2분 전~1분 뒤·시간 있는 것만")
+            let key = TaskLogic.alertKey(items[4], at: items[4].date)!
+            check(TaskLogic.due(items, now: now, alerted: [key]).map(\.id) == ["지남"], "알릴 항목: 이미 알린 것 제외")
+            check(TaskLogic.due(items, now: now, alerted: [key], snoozed: ["곧": now.addingTimeInterval(600)]).map(\.id) == ["지남"], "알릴 항목: 미룬 것은 아직")
+            check(TaskLogic.due(items, now: now.addingTimeInterval(590), alerted: [key], snoozed: ["곧": now.addingTimeInterval(600)]).map(\.id) == ["곧"], "알릴 항목: 미룬 시각에 다시")
+            // 번들 밖(.build/debug)에서는 권한을 요청하지 않는다(설명 키가 없으면 앱이 죽을 수 있음)
+            if Bundle.main.object(forInfoDictionaryKey: "NSRemindersFullAccessUsageDescription") == nil {
+                check(!TaskStore.canAsk(.reminder) && !TaskStore.canAsk(.event), "번들 밖에서는 권한 요청 안 함")
+            }
+            let bad = QuickParse.parse("2/30 메모", now: now, calendar: cal)
+            check(bad.title.contains("2/30"), "QuickParse 없는 날은 제목에 남김: \(bad)")
+            let en = QuickParse.parse("call mom tomorrow at 5pm", now: now, calendar: cal)
+            check(en.hasTime && en.date != nil && en.title == "call mom", "QuickParse 대체(NSDataDetector): \(en)")
+            let dateOnly = QuickParse.parse("dentist Dec 5", now: now, calendar: cal)
+            check(dateOnly.date != nil && !dateOnly.hasTime, "QuickParse 날짜만 있으면 시간 없음: \(dateOnly)")
+        }
+
+        // F26 할 일 창 진행·완료 문구
+        check(TaskLogic.progress(done: 2, left: 2) == (0.5, "오늘 2/4") && TaskLogic.progress(done: 0, left: 0).fraction == 0, "할 일 진행 막대")
+        check(DoneToast.text("치과") == "‘치과’ 끝냈어요", "완료 토스트 문구")
+        check(DoneAlert.summary(["A"]) == "A 작업이 끝났어요" && DoneAlert.summary(["A", "B", "A"]) == "그 사이 3개 끝났어요 · A, B", "끝남 모아 알리기 문구")
+        // F26 메뉴 막대 제목
+        do {
+            var g = Glance(); g.tasks = 3; g.tasksOn = true; g.next = "2:00 치과"
+            check(g.menuTitle == "3 · 2:00 치과", "메뉴 막대 제목: \(g.menuTitle)")
+            var e = Glance(); e.next = "2:00 치과"
+            check(e.menuTitle == "2:00 치과" && Glance().menuTitle.isEmpty, "메뉴 막대 제목: 할 일 꺼지면 일정만")
+        }
+        // F26 칩 내용
+        do {
+            var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Seoul")!
+            let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 13, minute: 52))!
+            func at(_ h: Int, _ m: Int, day: Int = 4) -> Date { cal.date(from: DateComponents(year: 2026, month: 11, day: day, hour: h, minute: m))! }
+            let items = [TaskItem(id: "a", title: "장보기", date: at(9, 0), hasTime: false, isEvent: false),
+                         TaskItem(id: "b", title: "책 읽기", date: nil, hasTime: false, isEvent: false),
+                         TaskItem(id: "c", title: "회의", date: at(11, 0), hasTime: true, isEvent: true),
+                         TaskItem(id: "d", title: "치과", date: at(14, 0), hasTime: true, isEvent: true),
+                         TaskItem(id: "e", title: "저녁", date: at(19, 0), hasTime: true, isEvent: true),
+                         TaskItem(id: "f", title: "내일 일정", date: at(9, 0, day: 5), hasTime: true, isEvent: true)]
+            let g = Glance.make(items: items, states: [.working, .done, .waiting], now: now, calendar: cal)
+            check(g.tasks == 2, "칩: 남은 할 일 2(일정 제외)")
+            check(g.next == "2:00 치과", "칩: 다음 일정은 오늘 가장 가까운 것 \(g.next)")
+            check(g.dots == [.waiting, .done], "칩: 상태 점은 급한 순, 하는 중 제외")
+            check(Glance.make(items: [], states: [], now: now, calendar: cal).isEmpty, "칩: 없으면 비어 있음")
+            var ag = Glance(); ag.dots = [.done, .done]
+            var aw = Glance(); aw.dots = [.waiting, .done]
+            check(ag.isEmpty && aw.dots.first == .waiting, "배지: 작업 상태는 칩이 아니라 곰 배지(가장 급한 상태 색)")
+            check(Glance.make(items: [], tasksOn: true, states: [], now: now, calendar: cal).isEmpty, "칩: 할 일 0개면 칩 없음(H2)")
+            var withClock = Glance(); withClock.tasks = 1
+            let w0 = GlanceChips.width(withClock); withClock.clock = "13:15:51"
+            check(GlanceChips.width(withClock) > w0 && Glance(clock: "1:00").isEmpty, "칩: 시계를 합치면 길어지고, 시계만으로는 비어 있음(H1)")
+            // F26 빠른 실행 후보
+            let qa = QuickRun.candidates("내일 3시 치과", tasks: [], clips: [], now: now, calendar: cal)
+            if case let .add(t, d, hasTime)? = qa.first?.kind { check(t == "치과" && hasTime && d != nil, "빠른 실행: 날짜 → 일정 추가 먼저") } else { check(false, "빠른 실행: 날짜 → 일정 추가 먼저 \(qa.first?.title ?? "")") }
+            check(QuickRun.candidates("캡처", tasks: [], clips: [], now: now, calendar: cal).first?.kind == .command("capture.area"), "빠른 실행: 캡처 → 영역 캡처")
+            check(QuickRun.candidates("왼쪽 반", tasks: [], clips: [], now: now, calendar: cal).first?.kind == .command("snap.leftHalf"), "빠른 실행: 왼쪽 반 → 창 정리")
+            for t in ["창문 닦기", "잠옷 사기", "복사기 수리"] {   // 명령 단어가 든 할 일은 명령이 먼저 오면 안 된다
+                check(QuickRun.candidates(t, tasks: [], clips: [], now: now, calendar: cal).first?.kind == .add(title: t, date: nil, hasTime: false), "빠른 실행: \(t) → 할 일 추가 먼저")
+            }
+            func qw(_ t: TaskItem) -> String { QuickRun.when(t, now: now, calendar: cal).text }
+            check(qw(TaskItem(id: "p", title: "x", date: at(9, 0, day: 1), hasTime: true, isEvent: true)) == "지난 일정 · 3일 전", "빠른 실행: 지난 일정")
+            check(qw(TaskItem(id: "p", title: "x", date: at(9, 0, day: 3), hasTime: false, isEvent: false)) == "놓친 할 일 · 어제", "빠른 실행: 놓친 할 일")
+            check(qw(TaskItem(id: "p", title: "x", date: at(9, 0, day: 3), hasTime: false, isEvent: false, done: true)).hasPrefix("끝낸 할 일"), "빠른 실행: 끝낸 할 일")
+            check(qw(TaskItem(id: "p", title: "x", date: at(9, 0, day: 9), hasTime: true, isEvent: true)).hasPrefix("5일 뒤 · 11/9"), "빠른 실행: 앞으로 \(qw(TaskItem(id: "p", title: "x", date: at(9, 0, day: 9), hasTime: true, isEvent: true)))")
+            let qm = QuickRun.candidates("회의", tasks: items, clips: ["회의록 링크"], now: now, calendar: cal)
+            check(qm.first?.kind == .task("c", isEvent: true) && qm.contains { $0.kind == .clip(0) } && qm.last?.kind == .add(title: "회의", date: nil, hasTime: false), "빠른 실행: 검색 → 할 일·클립보드, 맨 뒤 할 일 추가")
+            check(Geometry.islandSize(dock: .top, expanded: false, chips: 200).width > Geometry.islandSize(dock: .top, expanded: false).width, "알약: 칩만큼 길어짐")
+        }
+
+        // F26 세션 제목·끝남 알림 판정
+        do {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-title-\(ProcessInfo.processInfo.processIdentifier)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            func write(_ name: String, _ lines: [String]) -> String {
+                let u = dir.appendingPathComponent(name); try? lines.joined(separator: "\n").write(to: u, atomically: true, encoding: .utf8); return u.path
+            }
+            let both = write("a.jsonl", [#"{"type":"user","message":"hi"}"#, #"{"type":"ai-title","aiTitle":"옛 제목"}"#,
+                                         #"{"type":"custom-title","customTitle":"플레이리스트 개발"}"#, #"{"type":"ai-title","aiTitle":"새 자동 제목"}"#])
+            check(SessionTitle.read(both) == "플레이리스트 개발", "세션 제목: 직접 바꾼 이름 먼저")
+            let ai = write("b.jsonl", [#"{"type":"ai-title","aiTitle":"옛 제목"}"#, #"{"type":"ai-title","aiTitle":"Daymelo 자동화"}"#])
+            check(SessionTitle.read(ai) == "Daymelo 자동화", "세션 제목: 마지막 자동 제목")
+            let cut = write("d.jsonl", ["가", #"{"type":"ai-title","aiTitle":"한글 중간에서 잘림"}"#])
+            let cutSize = (try? FileManager.default.attributesOfItem(atPath: cut)[.size] as? Int) ?? 0
+            check(SessionTitle.read(cut, tail: cutSize - 1) == "한글 중간에서 잘림", "세션 제목: 한글 글자 중간부터 읽어도 제목을 찾음")
+            check(SessionTitle.read(write("c.jsonl", [#"{"type":"user"}"#])) == nil && SessionTitle.read(dir.appendingPathComponent("없음").path) == nil, "세션 제목: 없으면 nil")
+            try? FileManager.default.removeItem(at: dir)
+            check(!DoneAlert.shouldAnnounce(elapsed: 9, minSeconds: 10, frontApp: nil, sessionApp: "t"), "끝남: 짧은 답은 조용히")
+            check(DoneAlert.shouldAnnounce(elapsed: 10, minSeconds: 10, frontApp: "x", sessionApp: "t"), "끝남: 기준 이상이면 알림")
+            check(!DoneAlert.shouldAnnounce(elapsed: 60, minSeconds: 10, frontApp: "t", sessionApp: "t"), "끝남: 보고 있는 터미널은 조용히")
+            check(DoneAlert.shouldAnnounce(elapsed: nil, minSeconds: 10, frontApp: "x", sessionApp: "t"), "끝남: 시작 시각 모르면 알림")
+        }
 
         print(failures == 0 ? "selftest ok" : "selftest: \(failures) failed")
         return failures == 0 ? 0 : 1

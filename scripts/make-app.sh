@@ -23,6 +23,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSRemindersFullAccessUsageDescription</key><string>Tasky에서 할 일을 적고 끝내려면 미리 알림 접근이 필요해요.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Tasky에서 일정을 보고 추가하려면 캘린더 접근이 필요해요.</string>
 </dict></plist>
 PLIST
 codesign --force --sign - --identifier com.tasky.pet "$app"
