@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tasky 업데이트 목록(Sparkle). scripts/release.sh가 새 항목을 맨 위에 넣는다. 손으로 고치지 않는다. -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Tasky</title>
+    <!-- items -->
+  </channel>
+</rss>

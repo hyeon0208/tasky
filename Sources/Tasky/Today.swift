@@ -520,6 +520,43 @@ final class BlockClick: NSClickGestureRecognizer {
     @objc private func fire() { handler() }
 }
 
+/// 받침대 목록의 할 일 동그라미: 누르면 ✓, 1초 뒤 완료. 그 사이 다시 누르면 되돌림
+final class CheckCircle: NSView {
+    private let color: NSColor, onToggle: (Bool) -> Void, commit: () -> Void
+    private var done = false, work: DispatchWorkItem?
+    init(color: NSColor, onToggle: @escaping (Bool) -> Void, commit: @escaping () -> Void) {
+        self.color = color; self.onToggle = onToggle; self.commit = commit
+        super.init(frame: .zero)
+        toolTip = "눌러서 완료"
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds.insetBy(dx: 4, dy: 4)
+        let circle = NSBezierPath(ovalIn: r)
+        if done {
+            color.setFill(); circle.fill()
+            let tick = NSBezierPath()
+            tick.move(to: CGPoint(x: r.minX + r.width * 0.26, y: r.midY))
+            tick.line(to: CGPoint(x: r.minX + r.width * 0.44, y: r.minY + r.height * 0.3))
+            tick.line(to: CGPoint(x: r.minX + r.width * 0.76, y: r.minY + r.height * 0.7))
+            tick.lineWidth = 1.8; tick.lineCapStyle = .round; tick.lineJoinStyle = .round
+            NSColor.black.withAlphaComponent(0.75).setStroke(); tick.stroke()
+        } else {
+            circle.lineWidth = 1.6; color.setStroke(); circle.stroke()
+        }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        done.toggle(); needsDisplay = true; onToggle(done)
+        work?.cancel(); work = nil
+        guard done else { return }
+        let w = DispatchWorkItem { [weak self] in self?.commit() }
+        work = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
+    }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
 /// 누르면 동작하는 줄(손가락 커서)
 final class ClickRow: NSStackView {
     var onClick: () -> Void = {}
@@ -530,33 +567,79 @@ final class ClickRow: NSStackView {
 /// F28 11차 B: 받침대에 커서를 올리면 아래에 붙는 오늘 남은 일정 목록(누르면 고치기)
 final class StandEvents {
     private(set) var panel: FloatingPanel?
-    func show(_ events: [TaskItem], below stand: CGRect, parent: NSWindow?, onLeave: @escaping () -> Void) {
+    /// 시안 A(2026-11-06): 할 일(파랑 제목) 위, 구분선, 일정(노랑 제목) 아래. 각각 4줄까지.
+    /// 할 일 ○를 누르면 ✓·취소선으로 바뀌고 1초 뒤 완료(그 사이 다시 누르면 되돌림)
+    func show(_ events: [TaskItem], todos: [TaskItem] = [], below stand: CGRect, parent: NSWindow?, onLeave: @escaping () -> Void) {
         hide()
-        guard !events.isEmpty else { return }
-        let rows = Array(events.prefix(4)), rowH: CGFloat = 30, w = max(200, stand.width)
-        let h = CGFloat(rows.count) * rowH + 12
+        let todoRows = Array(todos.prefix(4)), eventRows = Array(events.prefix(4))
+        guard !todoRows.isEmpty || !eventRows.isEmpty else { return }
+        let blue = NSColor(red: 0.54, green: 0.71, blue: 1, alpha: 1), yellow = NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1)
+        let rowH: CGFloat = 28, headH: CGFloat = 22, gap: CGFloat = 13, w = max(200, stand.width)
+        func blockH(_ n: Int) -> CGFloat { n == 0 ? 0 : headH + CGFloat(n) * rowH }
+        let h = 12 + blockH(todoRows.count) + blockH(eventRows.count) + (todoRows.isEmpty || eventRows.isEmpty ? 0 : gap)
         let p = FloatingPanel(size: CGSize(width: w, height: h))
         p.appearance = NSAppearance(named: .darkAqua)
         p.setFrame(CGRect(x: stand.midX - w / 2, y: stand.minY - h - 4, width: w, height: h), display: false)
         let root = TrackingView(frame: CGRect(origin: .zero, size: p.frame.size))
         root.onExit = onLeave
         root.addSubview(makeGlass(cornerRadius: 14, frame: root.bounds))
-        let f = DateFormatter(); f.dateFormat = "H:mm"
-        for (i, e) in rows.enumerated() {
-            let d = e.date ?? Date()
-            let mins = Int(d.timeIntervalSinceNow / 60)
-            let time = NSTextField(labelWithString: f.string(from: d))
-            time.font = .monospacedDigitSystemFont(ofSize: 12, weight: .bold); time.textColor = NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1)
-            let title = NSTextField(labelWithString: e.title + (mins >= 0 && mins < 60 ? " · \(mins)분 뒤" : ""))
-            title.font = .systemFont(ofSize: 12, weight: .semibold); title.textColor = .white; title.lineBreakMode = .byTruncatingTail
-            let row = ClickRow(views: [time, title]); row.spacing = 10
-            row.frame = CGRect(x: 14, y: h - 6 - CGFloat(i + 1) * rowH + 6, width: w - 28, height: 18)
-            row.toolTip = e.ref?.calendar.allowsContentModifications == true ? "눌러서 고치기" : "이 캘린더는 고칠 수 없어요"
-            row.onClick = { [weak row] in
-                guard let row, e.ref?.calendar.allowsContentModifications == true else { NSSound.beep(); return }
-                TaskWindow.shared.edit(e, from: row)
+        var y = h - 6   // 위에서부터 내려온다
+        func head(_ text: String, _ color: NSColor) {
+            let l = NSTextField(labelWithString: text)
+            l.font = .systemFont(ofSize: 11, weight: .bold); l.textColor = color
+            y -= headH
+            l.frame = CGRect(x: 14, y: y + 3, width: w - 28, height: 15)
+            root.addSubview(l)
+        }
+        func titleLabel(_ text: String) -> NSTextField {
+            let t = NSTextField(labelWithString: text)
+            t.font = .systemFont(ofSize: 12, weight: .semibold); t.textColor = .white; t.lineBreakMode = .byTruncatingTail
+            return t
+        }
+        if !todoRows.isEmpty {
+            head("할 일 \(todos.count)", blue)
+            for item in todoRows {
+                y -= rowH
+                let title = titleLabel(item.title)
+                let row = ClickRow(views: [title])
+                row.frame = CGRect(x: 40, y: y + 5, width: w - 54, height: 18)
+                row.toolTip = "눌러서 고치기"
+                row.onClick = { [weak row] in if let row { TaskWindow.shared.edit(item, from: row) } }
+                let check = CheckCircle(color: blue) { [weak title] done in
+                    title?.attributedStringValue = NSAttributedString(string: item.title, attributes: [
+                        .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                        .foregroundColor: done ? NSColor.white.withAlphaComponent(0.45) : NSColor.white,
+                        .strikethroughStyle: done ? NSUnderlineStyle.single.rawValue : 0])
+                } commit: { TaskStore.shared.complete(item) }
+                check.frame = CGRect(x: 12, y: y + 3, width: 22, height: 22)
+                root.addSubview(check); root.addSubview(row)
             }
-            root.addSubview(row)
+        }
+        if !todoRows.isEmpty, !eventRows.isEmpty {
+            let line = NSBox(frame: CGRect(x: 14, y: y - gap / 2, width: w - 28, height: 1))
+            line.boxType = .custom; line.borderWidth = 0; line.fillColor = NSColor.white.withAlphaComponent(0.12)
+            root.addSubview(line)
+            y -= gap
+        }
+        if !eventRows.isEmpty {
+            head("일정 \(events.count)", yellow)
+            let f = DateFormatter(); f.dateFormat = "H:mm"
+            for e in eventRows {
+                y -= rowH
+                let d = e.date ?? Date()
+                let mins = Int(d.timeIntervalSinceNow / 60)
+                let time = NSTextField(labelWithString: f.string(from: d))
+                time.font = .monospacedDigitSystemFont(ofSize: 12, weight: .bold); time.textColor = yellow
+                let row = ClickRow(views: [time, titleLabel(e.title + (mins >= 0 && mins < 60 ? " · \(mins)분 뒤" : ""))]); row.spacing = 10
+                row.frame = CGRect(x: 14, y: y + 5, width: w - 28, height: 18)
+                let editable = e.ref?.calendar.allowsContentModifications == true
+                row.toolTip = editable ? "눌러서 고치기" : "이 캘린더는 고칠 수 없어요"
+                row.onClick = { [weak row] in
+                    guard let row, editable else { NSSound.beep(); return }
+                    TaskWindow.shared.edit(e, from: row)
+                }
+                root.addSubview(row)
+            }
         }
         p.contentView = root
         p.orderFrontRegardless()

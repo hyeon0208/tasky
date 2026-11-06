@@ -52,4 +52,5 @@ if Bundle.main.bundlePath.hasSuffix(".app") {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // Dock 아이콘 없이 메뉴 막대에만
 let controller = App()
+_ = Updater.controller   // F29: 자동 업데이트 시작(.app일 때만)
 app.run()

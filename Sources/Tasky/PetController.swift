@@ -109,6 +109,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         NotificationCenter.default.addObserver(forName: TaskStore.changedNote, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.updateTaskBadge()
+            if self.standEvents.panel != nil, !TaskWindow.shared.isEditing { self.showStandEvents() }   // 체크·고친 결과를 목록에 반영
             if self.dock.isDocked, self.ring == nil, !self.hovering { self.place(animated: true) }   // 칩만큼 알약 길이가 바뀐다
         }
         // F26: 칩의 '다음 일정'·남은 수는 시간이 지나면 바뀐다(1분마다 다시 그림)
@@ -621,7 +622,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         guard let stand else { return }
         let now = Date(), end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now))!
         let list = TaskStore.anyOn ? TaskLogic.upcomingEvents(TaskStore.shared.items, now: now, days: 1).filter { $0.hasTime && ($0.date ?? end) < end } : []
-        standEvents.show(list, below: stand.panel.frame, parent: pet) { [weak self] in self?.hideStandEventsIfOutside(); self?.updateClock() }
+        let todos = TaskStore.anyOn ? TaskLogic.pending(TaskStore.shared.items, now: now) : []
+        standEvents.show(list, todos: todos, below: stand.panel.frame, parent: pet) { [weak self] in self?.hideStandEventsIfOutside(); self?.updateClock() }
     }
     private func hideStandEventsIfOutside() {
         let m = NSEvent.mouseLocation
@@ -1170,6 +1172,10 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             }())] : []) + [
             SettingsTab(id: "about", title: "정보", symbol: "info.circle", content: SettingsTabs.grid([(nil, [
                 [label("버전"), NSTextField(labelWithString: version)],
+            ] + (Updater.isAvailable ? [
+                [label("업데이트"), ClosureButton("지금 확인") { Updater.checkNow() }],
+                [label("자동으로 확인"), SettingsTabs.toggle(Updater.automatic) { Updater.automatic = $0 }, hint("새 버전이 나오면 알려 줘요")],
+            ] : []) + [
                 [label("만든 곳"), link("github.com/hyeon0208/tasky", "https://github.com/hyeon0208/tasky"), hint("MIT 라이선스 · 버그와 제안은 GitHub 이슈로")],
                 [label("데이터 저장 위치"), NSTextField(labelWithString: "이 Mac에만"), hint("설정·클립보드 기록·서랍은 이 Mac에만 저장되고 어디로도 보내지 않아요. 할 일·일정은 macOS '미리 알림'·'캘린더' 앱에 저장돼요.")],
             ]), ("권한 — 쓰는 기능을 켰을 때만 물어요", [

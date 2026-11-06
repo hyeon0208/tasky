@@ -8,6 +8,7 @@ macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없�
 - 자체 검사: `.build/debug/Tasky --selftest` (위치·링 계산, 작업 알림 상태 전환, 훅→소켓 왕복은 `TASKY_HOME=<임시폴더>`일 때)
 - 변환만 확인: `.build/debug/Tasky --convert <ConvertOp> <파일...>`
 - 훅 연결: `.build/debug/Tasky --connect|--disconnect claude|codex` (`TASKY_HOME`으로 실제 설정 대신 임시 폴더 사용 가능)
+- 출시: `scripts/release.sh <버전> [--dry-run]` (VERSION·zip·dmg·Sparkle 서명·GitHub Release·appcast.xml, F29)
 - 실행: `.build/debug/Tasky` (메뉴 막대 잎 아이콘 → 종료). `--debug`를 붙이면 설정에 '개발자' 탭(CPU·메모리·화면 갱신·애니메이션·타이머, CSV 기록)
 
 ## 규칙

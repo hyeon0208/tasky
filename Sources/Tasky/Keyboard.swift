@@ -259,7 +259,10 @@ enum InputSources {
         }
         guard let c = cached, let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         let toKo = nextIsKorean(reportedKorean: info(cur).languages.first == "ko", last: last, now: Date())
-        if TISSelectInputSource(toKo ? c.ko : c.en) == noErr { last = (toKo, Date()) } else { cached = nil }
+        let t0 = Date()
+        let err = TISSelectInputSource(toKo ? c.ko : c.en)
+        if Debug.isOn { diag("%@로 전환 %.1fms, 결과 %d", toKo ? "한글" : "영문", Date().timeIntervalSince(t0) * 1000, err) }
+        if err == noErr { last = (toKo, Date()) } else { cached = nil }
     }
 
     /// 마지막으로 우리가 고른 소스와 시각
@@ -296,6 +299,7 @@ final class KeySwitcher {
     func apply(ask: Bool = false) {
         stop()
         guard Self.enabled else { return }
+        if Debug.isOn { diag("시작 — 입력 모니터링 %@, 소스 %@, 손쉬운 사용 %@", hasPermission ? "있음" : "없음", InputSources.available ? "있음" : "없음", AXIsProcessTrusted() ? "있음" : "없음") }
         guard hasPermission else {
             if ask { CGRequestListenEventAccess() }
             return
@@ -326,6 +330,7 @@ final class KeySwitcher {
 
     /// 감지를 멈추고 Caps Lock을 원래대로(비정상 종료 뒤 남은 바꿈도 여기서 지운다)
     func stop() {
+        flushQueue()   // 줄에 남은 키를 잃지 않게
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
@@ -342,10 +347,20 @@ final class KeySwitcher {
     @discardableResult
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if Debug.isOn { diag("감지가 꺼졌다 다시 켬(\(type == .tapDisabledByTimeout ? "시간 초과" : "사용자 입력"))") }
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
+        if event.getIntegerValueField(.eventSourceUserData) == Self.repostMark {   // 우리가 다시 보낸 키
+            inFlight = max(0, inFlight - 1)
+            if inFlight == 0 { afterPosted() }
+            return false
+        }
         let code = event.getIntegerValueField(.keyboardEventKeycode)
+        if Debug.isOn, type == .keyDown, code == judge.key.keyCode, event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            let lateMs = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- event.timestamp) / 1_000_000
+            diag("전환 키 도착 지연 %.1fms, 거르는 감지 %@", lateMs, filtering ? "켬" : "끔")
+        }
         let e: KeyEvent = switch type {
         case .keyDown: .down(code: code, isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
         case .keyUp: .up(code: code)
@@ -361,15 +376,89 @@ final class KeySwitcher {
             }
         }
         // F18(Caps)은 앱에 보내지 않는다(다른 앱이 F18을 받아 엉뚱한 동작을 하지 않게)
-        return filtering && judge.key == .capsLock && (type == .keyDown || type == .keyUp) && code == judge.key.keyCode
+        if filtering && judge.key == .capsLock && (type == .keyDown || type == .keyUp) && code == judge.key.keyCode { return true }
+        // 전환 대기 중에 친 키는 줄에 세웠다가 순서대로 다시 보낸다
+        if busy, type == .keyDown || type == .keyUp || type == .flagsChanged, let copy = event.copy() {
+            queue.append(.key(copy))
+            return true
+        }
+        return false
+    }
+
+    // F28: 다른 앱(터미널·브라우저)은 입력 소스 바뀜을 몇십 ms 늦게 받아, Caps 직후 친 글자가 이전 언어로 들어갔다
+    // (진단: 키 도착 지연 최대 5ms, 전환 호출 오류 0). 거르는 감지일 때 키와 전환을 한 줄에 세워
+    // [Caps 앞 키 보냄 → 잠깐 → 전환 → 잠깐 → Caps 뒤 키 보냄] 순서를 지킨다. 다시 보낸 키가 감지를 다시 지나기 전엔
+    // 새 키도 줄에 세운다(앞질러 '떼기'가 '누르기'보다 먼저 가면 앱이 꾹 누른 걸로 보고 특수 문자 창을 띄웠다).
+    static let settleTime: TimeInterval = 0.06
+    private static let repostMark: Int64 = 0x54_41_53_4B   // "TASK": 다시 보낸 이벤트 표시
+    private enum Queued { case key(CGEvent), toggle(SwitchAction) }
+    private var queue: [Queued] = []
+    /// 줄을 처리하는 중(전환 대기·다시 보낸 키 기다림)
+    private var busy = false
+    private var inFlight = 0
+    private var postRound = 0
+
+    private func requestToggle(_ a: SwitchAction) {
+        guard filtering else { perform(a); return }
+        if busy { queue.append(.toggle(a)); return }
+        busy = true
+        perform(a)
+        Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in self?.pump() }
+    }
+
+    /// 다음 전환 전까지의 키를 보낸다
+    private func pump() {
+        var n = 0
+        while let first = queue.first, case .key(let e) = first {
+            queue.removeFirst()
+            e.setIntegerValueField(.eventSourceUserData, value: Self.repostMark)
+            e.post(tap: .cgSessionEventTap)
+            n += 1
+        }
+        guard n > 0 else { afterPosted(); return }
+        inFlight += n
+        postRound += 1
+        let round = postRound
+        // 다시 보낸 키가 돌아오지 않아도 키보드가 막히지 않게
+        Ticker.once("한영 전환 대기", 0.3) { [weak self] _ in
+            guard let self, self.postRound == round, self.inFlight > 0 else { return }
+            self.inFlight = 0
+            self.afterPosted()
+        }
+    }
+
+    /// 보낸 키가 다 지나간 뒤: 줄 앞이 전환이면 잠깐 두고 전환, 비었으면 대기 끝
+    private func afterPosted() {
+        guard busy, inFlight == 0 else { return }
+        guard let first = queue.first else { busy = false; return }
+        guard case .toggle(let a) = first else { pump(); return }
+        queue.removeFirst()
+        Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in
+            guard let self else { return }
+            self.perform(a)
+            Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in self?.pump() }
+        }
+    }
+
+    /// 감지를 멈출 때 줄에 남은 키를 잃지 않게 보낸다(전환은 버림)
+    private func flushQueue() {
+        for case .key(let e) in queue { e.setIntegerValueField(.eventSourceUserData, value: Self.repostMark); e.post(tap: .cgSessionEventTap) }
+        queue = []; busy = false; inFlight = 0; postRound += 1
     }
 
     private func act(_ a: SwitchAction?) {
         switch a {
+        case .toggleInput, .capsInstead: requestToggle(a!)
+        case .toggleCapsLock: Self.toggleCapsLock()
+        case nil: break
+        }
+    }
+
+    private func perform(_ a: SwitchAction) {
+        switch a {
         case .toggleInput: InputSources.toggle()
         case .toggleCapsLock: Self.toggleCapsLock()
         case .capsInstead: InputSources.toggle(); Self.toggleCapsLock()
-        case nil: break
         }
     }
 
@@ -443,4 +532,10 @@ enum KeyRepeat {
             UserDefaults.standard.removeObject(forKey: originalKey(key))
         }
     }
+}
+
+/// 한영 전환 진단(--debug에서만 부름). 앱으로 띄우면 NSLog가 로그에 안 남아 stderr에 쓴다(`open --stderr <파일>`로 받음)
+func diag(_ format: String, _ args: CVarArg...) {
+    let line = "\(Date()) 전환 진단: \(String(format: format, arguments: args))\n"
+    FileHandle.standardError.write(line.data(using: .utf8)!)
 }

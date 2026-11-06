@@ -9,7 +9,16 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Tasky" "$app/Contents/MacOS/Tasky"
 cp -R "$bin/Tasky_Tasky.bundle" "$app/Contents/Resources/"
-version=$(git describe --tags --always 2>/dev/null || echo 0.1)
+mkdir -p "$app/Contents/Frameworks"
+ditto "$bin/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"   # F29 자동 업데이트
+version=$(cat VERSION)
+# Sparkle 공개 키(scripts/sparkle-public-key, 저장소에 둠). 없으면 업데이트 없이 만든다.
+sparkle=""
+if [[ -s scripts/sparkle-public-key ]]; then
+  sparkle="<key>SUFeedURL</key><string>https://raw.githubusercontent.com/hyeon0208/tasky/main/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>$(cat scripts/sparkle-public-key)</string>
+  <key>SUEnableAutomaticChecks</key><true/>"
+fi
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -18,11 +27,12 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Tasky</string>
   <key>CFBundleExecutable</key><string>Tasky</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  $sparkle
   <key>NSRemindersFullAccessUsageDescription</key><string>Tasky에서 할 일을 적고 끝내려면 미리 알림 접근이 필요해요.</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>Tasky에서 일정을 보고 추가하려면 캘린더 접근이 필요해요.</string>
   <key>NSFocusStatusUsageDescription</key><string>집중 모드가 켜져 있을 때 일정·할 일 알림을 띄우지 않으려고 집중 상태를 확인해요.</string>
