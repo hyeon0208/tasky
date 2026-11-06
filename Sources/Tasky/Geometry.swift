@@ -403,8 +403,8 @@ enum SelfTest {
         check(Geometry.slotCenters(count: 8, dock: .free, center: .zero, size: 200)[0].x < Geometry.slotCenters(count: 8, dock: .free, center: .zero)[0].x, "큰 펫은 링도 커짐")
 
         // F12 키보드: 판정
-        func run(_ key: SwitchKey, _ events: [(KeyEvent, Double)]) -> [SwitchAction] {
-            var j = SwitchJudge(key: key)
+        func run(_ key: SwitchKey, _ events: [(KeyEvent, Double)], longPress: Bool = true) -> [SwitchAction] {
+            var j = SwitchJudge(key: key, code: key == .capsLock ? 79 : nil, longPressOn: longPress)
             return events.compactMap { j.feed($0.0, at: t0.addingTimeInterval($0.1)) }
         }
         let rcmdDown = KeyEvent.flags(code: 54, flags: 0x100000 | 0x10), rcmdUp = KeyEvent.flags(code: 54, flags: 0)
@@ -419,22 +419,40 @@ enum SelfTest {
               "Caps 누르고 있으면 0.5초에 한 번만 대문자 고정")
         check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.down(code: 0, isRepeat: false), 0.05), (.up(code: 79), 0.08)]) == [.toggleInput], "빠르게 치다 Caps와 다음 글자가 겹쳐도 전환(씹힘 없음)")
         check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.up(code: 79), 0.05), (.down(code: 79, isRepeat: false), 0.1), (.up(code: 79), 0.15)]) == [.toggleInput, .toggleInput], "연타 두 번 → 두 번 전환")
-        var jt = SwitchJudge(key: .capsLock)
+        var jt = SwitchJudge(key: .capsLock, code: 79)
         _ = jt.feed(.down(code: 79, isRepeat: false), at: t0)
         check(jt.tick(at: t0.addingTimeInterval(0.5)) == .capsInstead && jt.feed(.up(code: 79), at: t0.addingTimeInterval(0.7)) == nil, "반복 없이도 0.5초에 대문자 고정, 떼면 그만")
         check(run(.rightCommand, [(.flags(code: 55, flags: UInt64(0x100000 | 0x8)), 0), (.flags(code: 54, flags: UInt64(0x100000 | 0x8 | 0x10)), 0.1),
                                   (.flags(code: 54, flags: UInt64(0x100000 | 0x8)), 0.2)]).isEmpty, "왼쪽 ⌘을 누른 채 오른쪽 ⌘ → 전환 없음")
         check(run(.rightCommand, [(rcmdDown, 0), (.down(code: -1, isRepeat: false), 0.1), (rcmdUp, 0.2)]).isEmpty, "⌘-클릭 → 전환 없음")
         check(run(.rightCommand, [(rcmdDown, 0), (rcmdUp, 1.5)]).isEmpty, "오래 누르고 떼면 전환 없음")
+        // F31 ① 길게 누르기 끔: 한 번만 전환, 대문자 고정 없음
+        check(run(.capsLock, [(.down(code: 79, isRepeat: false), 0), (.down(code: 79, isRepeat: true), 0.6), (.up(code: 79), 1.0)], longPress: false) == [.toggleInput], "길게 누르기 끔 → 1초 눌러도 전환 한 번")
+        var jl = SwitchJudge(key: .capsLock, code: 79, longPressOn: false)
+        _ = jl.feed(.down(code: 79, isRepeat: false), at: t0)
+        check(jl.tick(at: t0.addingTimeInterval(0.6)) == nil, "길게 누르기 끔 → 0.5초 타이머도 없음")
+        check(run(.capsLock, [(.down(code: 80, isRepeat: false), 0), (.up(code: 80), 0.1)]).isEmpty, "다른 내부 키(F19)는 F18 판정이 무시")
+        // F31 ③ 내부 키 코드표, 매핑 항목
+        check(InternalKey.allCases.map(\.keyCode) == [105, 107, 113, 106, 64, 79, 80, 90] && InternalKey.f18.hid == 0x7_0000_006D && InternalKey.f20.hid == 0x7_0000_006F, "내부 키 코드표")
+        check(KeyMapping.removing([KeyMapping.entry(.f19), KeyMapping.entry(.f13)]).isEmpty, "다른 내부 키 항목도 우리 것으로 지움")
+        check(KeyMapping.blocks("R K V\n1   UserKeyMapping   (null)\n2   UserKeyMapping   (\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)\n")! == [[], [KeyMapping.entry(.f18)]], "장치별 목록 모두 읽기")
+        // F31 ③ 시스템 단축키 읽기
+        func hk(_ code: Int, _ mods: Int, _ on: Bool = true) -> [String: Any] { ["enabled": on, "value": ["parameters": [65535, code, mods], "type": "standard"]] }
+        let hks: [String: Any] = ["60": hk(80, 0x800000), "61": hk(79, 0x800000, false), "79": hk(105, 0x800000), "80": hk(107, 0x100000)]
+        check(SystemShortcut.matches(80, in: hks) && !SystemShortcut.matches(79, in: hks), "단축키: 켜진 60이 F19, 꺼진 61은 무시")
+        check(SystemShortcut.usedByOthers(105, in: hks) && !SystemShortcut.usedByOthers(107, in: hks) && !SystemShortcut.usedByOthers(80, in: hks), "다른 단축키가 쓰는 키(수정키 없는 것만, 60·61 제외)")
+        // F31 ④ 키보드별 실효 설정
+        check(Keyboards.activeKeys([], globalOn: true, globalKey: .capsLock) == [.capsLock] && Keyboards.activeKeys([], globalOn: false, globalKey: .capsLock).isEmpty, "키보드를 못 찾으면 전체 설정")
+        print("키보드:", Keyboards.connected().map { "\($0.name)(\($0.id))" }.joined(separator: ", "))
         // 매핑 합치기·빼기
         let other: KeyMapping.Entry = ["HIDKeyboardModifierMappingSrc": 1, "HIDKeyboardModifierMappingDst": 2]
         check(KeyMapping.adding([]) == [KeyMapping.ours] && KeyMapping.adding(KeyMapping.adding([other])) == [other, KeyMapping.ours], "매핑 더하기(한 번만, 다른 항목 보존)")
         check(KeyMapping.removing([other, KeyMapping.ours]) == [other], "매핑 빼기(다른 항목 보존)")
         let multi = "RegistryID  Key   Value\n10000cba5   UserKeyMapping   (\n)\n10000cc5c   UserKeyMapping   (\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)\n"
         check(KeyMapping.parse(KeyMapping.firstBlock(multi)) == [], "키보드별 출력: 첫 장치 목록만(빈 목록)")
-        check(KeyMapping.parse(KeyMapping.firstBlock("x   UserKeyMapping   (\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)\ny   UserKeyMapping   (\n)")) == [KeyMapping.ours], "키보드별 출력: 첫 장치 항목 읽기")
+        check(KeyMapping.parse(KeyMapping.firstBlock("x   UserKeyMapping   (\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)\ny   UserKeyMapping   (\n)")) == [KeyMapping.entry(.f18)], "키보드별 출력: 첫 장치 항목 읽기")
         check(KeyMapping.parse("(null)") == [] && KeyMapping.parse("{ weird }") == nil
-              && KeyMapping.parse("(\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)") == [KeyMapping.ours],
+              && KeyMapping.parse("(\n    {\n        HIDKeyboardModifierMappingDst = 30064771181;\n        HIDKeyboardModifierMappingSrc = 30064771129;\n    }\n)") == [KeyMapping.entry(.f18)],
               "hidutil 출력 읽기")
         // 입력 소스, 키 반복
         let ko = InputSourceInfo(id: "ko", languages: ["ko"], asciiCapable: false), abc = InputSourceInfo(id: "abc", languages: ["en"], asciiCapable: true)

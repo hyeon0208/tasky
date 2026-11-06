@@ -1041,20 +1041,83 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let permissionButton = ClosureButton("권한 열기") {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
         }
+        let longPressSwitch = SettingsTabs.toggle(SwitchOptions.longPressCaps) { on in
+            SwitchOptions.longPressCaps = on
+            KeySwitcher.shared.apply()
+        }
         func refreshKeyboard() {
             let ks = KeySwitcher.shared
+            let active = ks.anyActive   // F31: 전체 끔이어도 '켬' 키보드가 있으면 켜짐
             // 권한을 준 뒤 설정을 다시 열면 그때 감지를 시작한다
-            if KeySwitcher.enabled, ks.hasPermission, !ks.running { ks.apply() }
+            if active, ks.hasPermission, !ks.running { ks.apply() }
             if ks.running, !ks.hasPermission { ks.stop() }   // 권한을 거둔 뒤 Caps Lock이 먹통이 되지 않게
-            permissionButton.isHidden = !(KeySwitcher.enabled && !ks.hasPermission)
+            permissionButton.isHidden = !(active && !ks.hasPermission)
+            longPressSwitch.isEnabled = ks.activeKeys.contains(.capsLock) || (!active && KeySwitcher.key == .capsLock)   // ①은 Caps에만
             kbStatus.stringValue =
-                !KeySwitcher.enabled ? "켜면 입력 모니터링 권한을 물어요"
+                !active ? "켜면 입력 모니터링 권한을 물어요"
                 : !ks.hasPermission ? "입력 모니터링 권한이 필요해요"
                 : !InputSources.available ? "한국어·영문 입력 소스를 모두 켜 주세요"
-                : KeySwitcher.key == .capsLock ? "길게 누르면 대문자 고정. 비정상 종료 뒤엔 다시 켜거나 재시동하면 돌아와요"
+                : ks.activeKeys.contains(.capsLock) ? "비정상 종료 뒤엔 다시 켜거나 재시동하면 Caps Lock이 돌아와요"
                 : "그 키만 눌렀다 떼면 바뀌어요"
         }
         refreshKeyboard()
+        // F31 ③ 내부 전환 키: 다른 시스템 단축키가 쓰는 키는 흐리게
+        func internalKeyPopup() -> NSPopUpButton {
+            let keys = InternalKey.allCases
+            let p = popup(keys.map(\.title), selected: keys.firstIndex(of: InternalKey.current) ?? 0) { i in
+                InternalKey.current = keys[i]
+                InternalKey.chosen = true
+                KeySwitcher.shared.apply()
+                refreshKeyboard()
+            }
+            p.menu?.autoenablesItems = false
+            let hotkeys = SystemShortcut.all()
+            for (i, k) in keys.enumerated() where k != InternalKey.current && SystemShortcut.usedByOthers(k.keyCode, in: hotkeys) {
+                p.menu?.item(at: i)?.isEnabled = false
+            }
+            return p
+        }
+        // F31 ④ 키보드별: 연결된 키보드와 기억한 키보드
+        func keyboardRows() -> [[NSView]] {
+            let connected = Keyboards.connected()
+            Keyboards.remember(connected)
+            let ids = Keyboards.saved.keys.sorted { a, b in
+                let ca = connected.contains { $0.id == a }, cb = connected.contains { $0.id == b }
+                return ca != cb ? ca : (Keyboards.saved[a]?["name"] ?? a) < (Keyboards.saved[b]?["name"] ?? b)
+            }
+            let keyChoices: [SwitchKey?] = [nil] + SwitchKey.allCases
+            var rows: [[NSView]] = ids.map { id in
+                let isOn = connected.contains { $0.id == id }
+                let name = label(Keyboards.saved[id]?["name"] ?? id)
+                if !isOn { name.textColor = .secondaryLabelColor }
+                let use = popup(DeviceUse.allCases.map(\.title), selected: DeviceUse.allCases.firstIndex(of: Keyboards.use(id)) ?? 1) { i in
+                    Keyboards.set(id, use: DeviceUse.allCases[i])
+                    KeySwitcher.shared.apply()
+                    refreshKeyboard()
+                }
+                let key = popup(keyChoices.map { $0?.title ?? "기본값" }, selected: keyChoices.firstIndex(of: Keyboards.key(id)) ?? 0) { i in
+                    Keyboards.set(id, key: keyChoices[i])
+                    KeySwitcher.shared.apply()
+                    refreshKeyboard()
+                }
+                var controls: [NSView] = [key, use]
+                if !isOn {
+                    let forget = ClosureButton("지우기") {}
+                    forget.handler = { [weak name, weak use, weak key, weak forget] in
+                        Keyboards.forget(id)
+                        name?.stringValue += " (지움)"
+                        [use, key, forget].forEach { $0?.isEnabled = false }
+                    }
+                    controls.append(forget)
+                }
+                let box = NSStackView(views: controls)
+                box.spacing = 6
+                return [name, box, hint(isOn ? "연결됨" : "연결 안 됨")]
+            }
+            if rows.isEmpty { rows = [[NSView(), hint("키보드를 찾지 못했어요. 위의 설정이 모든 키보드에 쓰여요")]] }
+            rows.append([NSView(), hint("기본값은 위의 '한 키로 한영 바꾸기'·'쓸 키'를 따라요. 키보드마다 구분되는 건 Caps Lock뿐이에요(오른쪽 ⌘·⌥는 어느 키보드에서 눌렀는지 알 수 없어요)")])
+            return rows
+        }
         let kbStatusRow = NSStackView(views: [kbStatus, permissionButton])
         kbStatusRow.spacing = 6
         func repeatRow(_ key: String) -> NSView {
@@ -1149,9 +1212,15 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                     KeySwitcher.shared.apply()
                     refreshKeyboard()
                 }],
+                [label("길게 눌러 대문자 고정"), longPressSwitch, hint("Caps Lock을 0.5초 꾹 누르면 대문자 고정. 끄면 한 번만 바뀌어요")],
+                [label("바꿀 때 대문자 고정 유지"), check(SwitchOptions.keepCaps) { SwitchOptions.keepCaps = $0 },
+                 hint("끄면 한/영을 바꿀 때 대문자 고정을 꺼요")],
                 [NSView(), kbStatusRow],
-                [NSView(), hint("Caps Lock: 짧게 누르면 한/영, 0.5초 꾹 누르면 대문자 고정. 누르는 순간 바뀌어서 빠르게 쳐도 씹히지 않아요(손쉬운 사용 권한이 켜져 있으면 바뀐 뒤에 다음 글자가 들어가요). 다른 한영 전환 앱과 함께 켜 두면 서로 부딪혀요.")],
-                ]), ("키 반복", [
+                [NSView(), hint("Caps Lock: 누르는 순간 바뀌어서 빠르게 쳐도 씹히지 않아요(손쉬운 사용 권한이 켜져 있으면 바뀐 뒤에 다음 글자가 들어가요). 다른 한영 전환 앱과 함께 켜 두면 서로 부딪혀요.")],
+                ]), ("고급", [
+                [label("내부 전환 키"), internalKeyPopup(),
+                 hint("Caps Lock을 이 키로 바꿔 보내고, 시스템 '이전 입력 소스 선택' 단축키도 이 키로 맞춰요. 흐린 키는 다른 단축키가 쓰는 중이에요")],
+                ]), ("키보드별", keyboardRows()), ("키 반복", [
                 [label("꾹 누르고 반복이 시작될 때까지"), initialRow],
                 [NSView(), hint("키(예: ㅋ, ←, ⌫)를 누른 채로 있을 때, 두 번째 글자가 나오기까지 기다리는 시간이에요. 짧을수록 꾹 누르자마자 반복돼요.")],
                 [label("반복 빠르기"), rateRow],
@@ -1797,7 +1866,7 @@ final class App: NSObject {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) {
             [weak self] _ in
             self?.synth.stop()
-            KeySwitcher.shared.stop()
+            KeySwitcher.shared.shutdown()
             Awake.shared.syncLid(quitting: true)
         }
         // F12: 켜 두었으면 감지 시작(권한 창은 띄우지 않음), 꺼져 있으면 비정상 종료 뒤 남은 Caps Lock 바꿈을 지운다
