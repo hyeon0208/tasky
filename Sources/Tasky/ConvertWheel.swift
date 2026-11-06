@@ -2,6 +2,7 @@ import AppKit
 import QuickLookThumbnailing
 
 // F27 9번: 원형 변환. 파일을 들고 곰에 오면 곰 위에 둥근 부채꼴 칸이 펼쳐지고, 칸에 놓으면 변환한다.
+// 그리기는 wheel-style B "한 판 유리"(유리 고리 + 얇은 경계선 + 올린 칸 알약, 2026-11-06).
 // 칸이 7개 이하면 고리 하나, 넘으면 안쪽(형식)·바깥(동작) 두 고리. 화면 끝에서는 반원.
 
 struct WheelItem {
@@ -98,7 +99,7 @@ final class ConvertWheelView: NSView {
     required init?(coder: NSCoder) { fatalError() }
     deinit { spinTimer?.invalidate(); expandTimer?.invalidate() }
 
-    private func collapse() { expandTimer?.invalidate(); expandTimer = nil; expanded = nil; childWedges = []; needsDisplay = true }
+    private func collapse() { expandTimer?.invalidate(); expandTimer = nil; expanded = nil; childWedges = []; updateGlass(); needsDisplay = true }
 
     /// 펼친 동안은 자식 칸을 먼저 본다. 자식 칸 번호는 `items.count + i`
     private func hit(_ p: CGPoint) -> Int? {
@@ -128,7 +129,7 @@ final class ConvertWheelView: NSView {
                     guard let self, self.hovered == h else { return }
                     self.expanded = h
                     self.childWedges = WheelMath.children(of: self.wedges[h], count: self.items[h].children.count, start: self.arc.start, span: self.arc.span)
-                    self.needsDisplay = true
+                    self.updateGlass(); self.needsDisplay = true
                 }
             }
         }
@@ -146,73 +147,156 @@ final class ConvertWheelView: NSView {
         return true
     }
 
-    /// 모서리 둥근 부채꼴: 반지름 `rad`만큼 안으로 줄인 모양을 같은 색의 굵은 둥근 선으로 감싼다
-    private func wedgePath(_ w: WheelMath.Wedge, rad: CGFloat = 9, gap: CGFloat = 5, push: CGFloat = 0) -> NSBezierPath {
-        let a = w.r0 + rad, b = w.r1 - rad
-        let mid = (w.a0 + w.a1) / 2 * .pi / 180
-        let c = CGPoint(x: center.x + push * cos(mid), y: center.y + push * sin(mid))
-        let io = Double((gap / 2 + rad) / b) * 180 / .pi, ii = Double((gap / 2 + rad) / a) * 180 / .pi
+    /// 유리(아래에 깔린 뷰). 시스템 유리면 레이어 마스크, 뒤 흐림이면 마스크 그림으로 고리 모양을 오린다
+    weak var glass: NSView?
+
+    /// 모서리 둥근 부채꼴(칸 사이 간격은 평행하게). `inset`만큼 안쪽으로
+    private func wedgePath(_ w: WheelMath.Wedge, gap: CGFloat, rad: CGFloat, inset: CGFloat = 0) -> NSBezierPath {
+        let r0 = w.r0 + inset, r1 = w.r1 - inset, g = gap / 2 + inset
+        func deg(_ d: CGFloat, _ r: CGFloat) -> Double { Double(d / r) * 180 / .pi }
+        func pt(_ r: CGFloat, _ a: Double) -> CGPoint { CGPoint(x: center.x + r * cos(a * .pi / 180), y: center.y + r * sin(a * .pi / 180)) }
+        func toward(_ a: CGPoint, _ b: CGPoint, _ d: CGFloat) -> CGPoint { let l = hypot(b.x - a.x, b.y - a.y); return CGPoint(x: a.x + (b.x - a.x) / l * d, y: a.y + (b.y - a.y) / l * d) }
+        let oa0 = w.a0 - deg(g, r1), oa1 = w.a1 + deg(g, r1), ia0 = w.a0 - deg(g, r0), ia1 = w.a1 + deg(g, r0)
+        let rr = min(rad, (r1 - r0) / 2 - 0.5)
+        let p1 = pt(r1, oa0), p2 = pt(r1, oa1), p3 = pt(r0, ia1), p4 = pt(r0, ia0)
         let p = NSBezierPath()
-        p.appendArc(withCenter: c, radius: b, startAngle: w.a0 - io, endAngle: w.a1 + io, clockwise: true)
-        p.appendArc(withCenter: c, radius: a, startAngle: w.a1 + ii, endAngle: w.a0 - ii, clockwise: false)
+        p.move(to: pt(r1, oa0 - deg(rr, r1)))
+        p.appendArc(withCenter: center, radius: r1, startAngle: oa0 - deg(rr, r1), endAngle: oa1 + deg(rr, r1), clockwise: true)
+        p.curve(to: toward(p2, p3, rr), controlPoint: p2)
+        p.line(to: toward(p3, p2, rr))
+        p.curve(to: pt(r0, ia1 + deg(rr, r0)), controlPoint: p3)
+        p.appendArc(withCenter: center, radius: r0, startAngle: ia1 + deg(rr, r0), endAngle: ia0 - deg(rr, r0), clockwise: false)
+        p.curve(to: toward(p4, p1, rr), controlPoint: p4)
+        p.line(to: toward(p1, p4, rr))
+        p.curve(to: pt(r1, oa0 - deg(rr, r1)), controlPoint: p1)
         p.close()
-        p.lineJoinStyle = .round
-        p.lineWidth = rad * 2
         return p
     }
 
+    private var centerRadius: CGFloat { min(46, (wedges.map(\.r0).min() ?? 52) - 6) }
+
+    /// 유리 모양: 고리(한 바퀴면 동그란 고리, 반원이면 둥근 반고리) + 가운데 원 + 펼친 하위 칸
+    private func glassPath() -> NSBezierPath {
+        let p = NSBezierPath(); p.windingRule = .evenOdd
+        var rings: [(CGFloat, CGFloat)] = []
+        for w in wedges where !rings.contains(where: { $0 == (w.r0, w.r1) }) { rings.append((w.r0, w.r1)) }
+        for (r0, r1) in rings {
+            if arc.span >= 360 {
+                p.appendOval(in: CGRect(x: center.x - r1, y: center.y - r1, width: r1 * 2, height: r1 * 2))
+                p.appendOval(in: CGRect(x: center.x - r0, y: center.y - r0, width: r0 * 2, height: r0 * 2))
+            } else {
+                p.append(wedgePath(.init(r0: r0, r1: r1, a0: arc.start, a1: arc.start - arc.span), gap: 0, rad: 14))
+            }
+        }
+        let r = centerRadius
+        p.appendOval(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+        childWedges.forEach { p.append(wedgePath($0, gap: 3, rad: 10)) }
+        return p
+    }
+
+    /// 유리 모양이 바뀌면(처음·펼침·접힘) 뒤 흐림 마스크를 다시 만든다
+    func updateGlass() {
+        guard let glass else { return }
+        let path = glassPath()
+        if let effect = glass as? NSVisualEffectView {
+            effect.maskImage = NSImage(size: bounds.size, flipped: false) { _ in NSColor.black.setFill(); path.fill(); return true }
+        } else {
+            let mask = CAShapeLayer(); mask.path = path.cgPath; mask.fillRule = .evenOdd
+            glass.wantsLayer = true; glass.layer?.mask = mask
+        }
+    }
+
+    private var isDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+
     override func draw(_ dirtyRect: NSRect) {
-        let shadow = NSShadow(); shadow.shadowBlurRadius = 14; shadow.shadowOffset = NSSize(width: 0, height: -6)
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
-        NSGraphicsContext.saveGraphicsState(); shadow.set()
+        let dark = isDark
+        let navy = NSColor(red: 0x14 / 255.0, green: 0x21 / 255.0, blue: 0x3A / 255.0, alpha: 1)
+        let ink = dark ? NSColor.white : NSColor(red: 16 / 255.0, green: 26 / 255.0, blue: 42 / 255.0, alpha: 0.88)
+        let onFill = dark ? NSColor.white.withAlphaComponent(0.92) : navy, onText = dark ? navy : NSColor.white
+        let textShadow: NSShadow? = dark ? { let s = NSShadow(); s.shadowOffset = NSSize(width: 0, height: -1); s.shadowBlurRadius = 1.5; s.shadowColor = NSColor.black.withAlphaComponent(0.35); return s }() : nil
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let shape = glassPath()
+        // 그림자: 유리 바깥에만
+        NSGraphicsContext.saveGraphicsState()
+        let outside = NSBezierPath(rect: bounds); outside.append(shape); outside.windingRule = .evenOdd; outside.addClip()
+        let shadow = NSShadow(); shadow.shadowOffset = NSSize(width: 0, height: -12); shadow.shadowBlurRadius = 22
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.18); shadow.set()
+        NSColor.black.setFill(); shape.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        // 유리 덧칠: 흰색 0.2 + 대각선 그라디언트
+        NSColor.white.withAlphaComponent(0.2).setFill(); shape.fill()
+        NSGradient(colorsAndLocations: (NSColor.white.withAlphaComponent(0.28), 0), (NSColor.white.withAlphaComponent(0.06), 0.6), (NSColor.white.withAlphaComponent(0.12), 1))?
+            .draw(in: shape, angle: -45)
+        // 테두리 빛 1.2pt: 왼쪽 위 0.95 → 가운데 0.25 → 오른쪽 아래 0.55
+        let reach = WheelMath.outerRadius(wedges + childWedges)
+        ctx.saveGState()
+        ctx.addPath(shape.cgPath); ctx.setLineWidth(1.2); ctx.replacePathWithStrokedPath(); ctx.clip()
+        NSGradient(colorsAndLocations: (NSColor.white.withAlphaComponent(0.95), 0), (NSColor.white.withAlphaComponent(0.25), 0.45), (NSColor.white.withAlphaComponent(0.55), 1))?
+            .draw(from: CGPoint(x: center.x - reach, y: center.y + reach), to: CGPoint(x: center.x + reach, y: center.y - reach), options: [])
+        ctx.restoreGState()
+        // 칸 경계선(반원의 양 끝은 긋지 않는다)
+        (dark ? NSColor.white.withAlphaComponent(0.35) : NSColor(red: 16 / 255.0, green: 26 / 255.0, blue: 42 / 255.0, alpha: 0.1)).setStroke()
+        for w in wedges where arc.span >= 360 || abs(w.a0 - arc.start) > 0.01 {
+            let a = w.a0 * .pi / 180, line = NSBezierPath()
+            line.move(to: CGPoint(x: center.x + (w.r0 + 6) * cos(a), y: center.y + (w.r0 + 6) * sin(a)))
+            line.line(to: CGPoint(x: center.x + (w.r1 - 6) * cos(a), y: center.y + (w.r1 - 6) * sin(a)))
+            line.lineWidth = 1; line.stroke()
+        }
+        // 알약: 올린 칸(그림자), 펼친 부모 칸은 흐린 알약
         let allWedges = wedges + childWedges
         let allItems = items + (expanded.map { items[$0].children } ?? [])
-        for (i, w) in allWedges.enumerated() {
-            let on = i == hovered || i == expanded
-            let path = wedgePath(w, push: on ? 6 : 0)
-            let rim = path.copy() as! NSBezierPath
-            rim.lineWidth = path.lineWidth + 2
-            NSColor.white.withAlphaComponent(0.95).set(); rim.fill(); rim.stroke()
-            (on ? NSColor.systemBlue.withAlphaComponent(0.95) : NSColor.white.withAlphaComponent(0.82)).set()
-            path.fill(); path.stroke()
+        if let e = expanded, e != hovered, e < wedges.count {
+            NSColor.white.withAlphaComponent(0.4).setFill(); wedgePath(wedges[e], gap: 0, rad: 14, inset: 4).fill()
         }
-        NSGraphicsContext.restoreGraphicsState()
-        // 칸 이름·설명
+        if let h = hovered, h < allWedges.count {
+            NSGraphicsContext.saveGraphicsState()
+            let s = NSShadow(); s.shadowOffset = NSSize(width: 0, height: -3); s.shadowBlurRadius = 6; s.shadowColor = NSColor.black.withAlphaComponent(0.18); s.set()
+            onFill.setFill(); wedgePath(allWedges[h], gap: 0, rad: 14, inset: 4).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        // 칸 이름: 형식 13pt, 동작·하위 11.5·11pt. 동작 이름은 마지막 띄어쓰기에서 두 줄
         for (i, w) in allWedges.enumerated() where i < allItems.count {
-            let on = i == hovered || i == expanded
-            let mid = (w.a0 + w.a1) / 2 * .pi / 180, r = (w.r0 + w.r1) / 2 + (on ? 6 : 0)
-            let tc = on ? NSColor.white : NSColor(red: 0.12, green: 0.16, blue: 0.22, alpha: 1)
-            let small = (w.a0 - w.a1) < 40 && w.r1 - w.r0 < 70
-            let t = NSAttributedString(string: allItems[i].title, attributes: [.font: NSFont.systemFont(ofSize: small ? 11 : 12, weight: .bold), .foregroundColor: tc])
+            let on = i == hovered, item = allItems[i], isChild = i >= wedges.count
+            let mid = (w.a0 + w.a1) / 2 * .pi / 180, r = (w.r0 + w.r1) / 2
             let p = CGPoint(x: center.x + r * cos(mid), y: center.y + r * sin(mid))
-            let ts = t.size()
-            if let note = allItems[i].note {
-                let n = NSAttributedString(string: note, attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .semibold), .foregroundColor: tc.withAlphaComponent(0.7)])
-                t.draw(at: CGPoint(x: p.x - ts.width / 2, y: p.y))
-                n.draw(at: CGPoint(x: p.x - n.size().width / 2, y: p.y - n.size().height))
-            } else {
-                t.draw(at: CGPoint(x: p.x - ts.width / 2, y: p.y - ts.height / 2))
+            var attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: isChild ? 11 : item.isFormat ? 13 : 11.5, weight: .bold), .foregroundColor: on ? onText : ink]
+            if !on, let textShadow { attrs[.shadow] = textShadow }
+            var parts = [item.title]
+            if !item.isFormat, !isChild, let sp = item.title.lastIndex(of: " ") { parts = [String(item.title[..<sp]), String(item.title[item.title.index(after: sp)...])] }
+            if isChild, let x = item.title.firstIndex(of: "×") { parts = [String(item.title[...x]), String(item.title[item.title.index(after: x)...])] }   // 해상도는 × 뒤에서 두 줄
+            var lines = parts.map { NSAttributedString(string: $0, attributes: attrs) }
+            if let note = item.note {
+                var n = attrs; n[.font] = NSFont.systemFont(ofSize: 9, weight: .semibold); n[.foregroundColor] = (on ? onText : ink).withAlphaComponent(0.7)
+                lines.append(NSAttributedString(string: note, attributes: n))
+            }
+            let lh: CGFloat = 13.5
+            for (k, l) in lines.enumerated() {
+                let sz = l.size(), y = p.y + (CGFloat(lines.count - 1) / 2 - CGFloat(k)) * lh
+                l.draw(at: CGPoint(x: p.x - sz.width / 2, y: y - sz.height / 2))
             }
         }
         // 가운데 원
-        let r: CGFloat = min(46, (wedges.map(\.r0).min() ?? 52) - 6)
+        let r = centerRadius
         let circle = NSBezierPath(ovalIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
-        NSColor.white.withAlphaComponent(0.88).setFill(); circle.fill()
-        NSColor.white.setStroke(); circle.lineWidth = 1; circle.stroke()
-        let ink = NSColor(red: 0.12, green: 0.16, blue: 0.22, alpha: 1)
+        NSColor.white.withAlphaComponent(0.75).setStroke(); circle.lineWidth = 1; circle.stroke()
         let para = NSMutableParagraphStyle(); para.alignment = .center; para.lineBreakMode = .byTruncatingTail
+        func attrs(_ size: CGFloat, _ weight: NSFont.Weight, _ alpha: CGFloat) -> [NSAttributedString.Key: Any] {
+            var a: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: ink.withAlphaComponent(ink.alphaComponent * alpha), .paragraphStyle: para]
+            if let textShadow { a[.shadow] = textShadow }
+            return a
+        }
         func lines(_ texts: [String]) {
             let h: CGFloat = 15, top = center.y + CGFloat(texts.count) * h / 2
             for (k, s) in texts.enumerated() {
-                NSAttributedString(string: s, attributes: [.font: NSFont.systemFont(ofSize: k == 0 ? 12 : 10, weight: k == 0 ? .bold : .medium),
-                                                          .foregroundColor: k == 0 ? ink : ink.withAlphaComponent(0.7), .paragraphStyle: para])
+                NSAttributedString(string: s, attributes: k == 0 ? attrs(12.5, .bold, 1) : attrs(10, .medium, 0.75))
                     .draw(in: CGRect(x: center.x - r + 6, y: top - CGFloat(k + 1) * h, width: r * 2 - 12, height: h))
             }
         }
         if let working {
             let arc = NSBezierPath()
-            arc.appendArc(withCenter: center, radius: r - 5, startAngle: angle, endAngle: angle + 250)
-            NSColor.systemGreen.setStroke(); arc.lineWidth = 5; arc.lineCapStyle = .round; arc.stroke()
+            arc.appendArc(withCenter: center, radius: r - 6, startAngle: angle, endAngle: angle + 250)
+            (dark ? NSColor.white : NSColor(red: 0x2F / 255.0, green: 0x6B / 255.0, blue: 1, alpha: 1)).setStroke()
+            arc.lineWidth = 4; arc.lineCapStyle = .round; arc.stroke()
             lines([working, "바꾸는 중"])
         } else if let i = hovered, i < allItems.count {
             lines([allItems[i].title] + allItems[i].detail.split(separator: "\n").map(String.init))
@@ -221,7 +305,7 @@ final class ConvertWheelView: NSView {
                 let s: CGFloat = r * 1.1
                 thumbnail.draw(in: CGRect(x: center.x - s / 2, y: center.y - s / 2 + 8, width: s, height: s * 0.75), from: .zero, operation: .sourceOver, fraction: 1)
             }
-            NSAttributedString(string: caption, attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .bold), .foregroundColor: ink, .paragraphStyle: para])
+            NSAttributedString(string: caption, attributes: attrs(10, .bold, 1))
                 .draw(in: CGRect(x: center.x - r + 6, y: center.y - r + 12, width: r * 2 - 12, height: 14))
         }
     }
@@ -254,7 +338,15 @@ final class ConvertWheel {
         wv.caption = files.count > 1 ? "\(files.count)개" : Self.sizeText(files.first)
         wv.onCenterDrop = { [weak self] in self?.close(); onCenterDrop() }
         wv.onPick = { [weak wv] i in guard let wv, i < ordered.count else { return }; wv.hovered = nil; ordered[i].action() }
-        p.contentView = wv
+        // 유리(시스템 유리, 없으면 뒤 흐림)를 아래에 깔고, 칸 그림은 그 위에
+        let container = NSView(frame: wv.frame)
+        let glass: NSView
+        if let cls = systemGlass { glass = cls.init(frame: wv.frame) }   // macOS 26+: 시스템 리퀴드 글래스
+        else { let e = NSVisualEffectView(frame: wv.frame); e.material = .popover; e.blendingMode = .behindWindow; e.state = .active; glass = e }
+        container.addSubview(glass); container.addSubview(wv)
+        wv.glass = glass
+        wv.updateGlass()
+        p.contentView = container
         p.orderFrontRegardless()
         panel = p; view = wv
         Self.thumbnail(files.first) { [weak wv] img in wv?.thumbnail = img }

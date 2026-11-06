@@ -406,7 +406,7 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
             }
             if events.count > 4 { evRows.append(label("외 \(events.count - 4)개", size: 11, color: .secondaryLabelColor)) }
             if evRows.isEmpty { evRows = [label(TaskStore.eventsOn ? "\(TaskStore.eventDays)일 안에 일정이 없어요" : "설정에서 캘린더를 켜면 보여요", size: 12, color: .secondaryLabelColor)] }
-            top.append(block(TaskStore.eventDays == 1 ? "일정 · 오늘" : "일정 · \(TaskStore.eventDays)일", NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1), evRows))
+            top.append(block("일정", NSColor(red: 1, green: 0.82, blue: 0.54, alpha: 1), evRows))
             if let problem { let l = label(problem, size: 12, color: .systemRed); l.lineBreakMode = .byWordWrapping; l.preferredMaxLayoutWidth = Self.width - 28; bottom.append(l) }
         } else {
             top.append(box([label("할 일·일정을 켜면 여기에 보여요", size: 13, color: .secondaryLabelColor),

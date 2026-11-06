@@ -152,6 +152,15 @@ enum TaskLogic {
         return g.today + g.undated
     }
 
+    /// 할 일 창 일정: 오늘 일정 + 그 뒤 일정이 있는 첫날의 일정, 시간 순
+    static func windowEvents(_ items: [TaskItem], now: Date, calendar: Calendar = .current) -> [TaskItem] {
+        let today = calendar.startOfDay(for: now), tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let events = items.filter { $0.isEvent && ($0.date ?? .distantPast) >= today }.sorted { $0.date! < $1.date! }
+        guard let next = events.first(where: { $0.date! >= tomorrow })?.date else { return events }
+        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: next))!
+        return events.filter { $0.date! < end }
+    }
+
     /// F27 오늘 카드 일정: 지금(시작 5분 지난 것까지)부터 `days`일 뒤 자정 전까지, 시간 순
     static func upcomingEvents(_ items: [TaskItem], now: Date, days: Int, calendar: Calendar = .current) -> [TaskItem] {
         let end = calendar.date(byAdding: .day, value: max(1, days), to: calendar.startOfDay(for: now))!
@@ -774,7 +783,8 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
     private let heading = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
     private let progressText = NSTextField(labelWithString: "")
-    private let colTitles = (NSTextField(labelWithString: "오늘"), NSTextField(labelWithString: "다가오는"))
+    private let colTitles = (NSTextField(labelWithString: "할 일"), NSTextField(labelWithString: "일정"))
+    private var showLater = false
 
     static func timeText(_ d: Date, hasTime: Bool) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "ko_KR")
@@ -979,9 +989,11 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         heading.stringValue = left == 0 ? "오늘 할 일을 다 했어요" : "할 일 \(left)개 남았어요"
         let p = TaskLogic.progress(done: store.doneToday, left: g.today.filter { !$0.isEvent }.count)
         progress.doubleValue = p.fraction; progressText.stringValue = p.text
-        // 왼쪽: 오늘 + 날짜 없음, 오른쪽: 다가오는 일
-        colTitles.0.stringValue = "오늘 \(g.today.count + g.undated.count)"
-        colTitles.1.stringValue = "다가오는 \(g.upcoming.count)"
+        // 왼쪽: 오늘 할 일(지난 것·날짜 없음 포함), 내일 이후는 더보기. 오른쪽: 오늘 + 다음 일정 있는 날의 일정
+        let todos = TaskLogic.groups(store.items.filter { !$0.isEvent }, now: Date())
+        let events = TaskLogic.windowEvents(store.items, now: Date())
+        colTitles.0.stringValue = "할 일 \(todos.today.count + todos.undated.count)"
+        colTitles.1.stringValue = "일정 \(events.count)"
         func fill(_ l: NSStackView, _ groups: [(String?, [TaskItem])], empty: String) {
             if groups.allSatisfy({ $0.1.isEmpty }) { l.addArrangedSubview(note(empty)) }
             for (name, items) in groups where !items.isEmpty {
@@ -997,8 +1009,17 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
             doc.frame.size = CGSize(width: width, height: max(size.height, 10))
             l.frame = CGRect(x: 0, y: 0, width: width, height: size.height)
         }
-        fill(list, [(nil, g.today), ("날짜 없음", g.undated), ("끝냄", TaskLogic.doneToday(store.doneItems, now: Date()))], empty: "비어 있어요. 아래에 적고 ↩를 누르면 추가돼요.")
-        fill(list2, [(nil, g.upcoming)], empty: "다가오는 일이 없어요.")
+        fill(list, [(nil, todos.today), ("날짜 없음", todos.undated), ("끝냄", TaskLogic.doneToday(store.doneItems, now: Date())),
+                    ("내일 이후", showLater ? todos.upcoming : [])], empty: "비어 있어요. 아래에 적고 ↩를 누르면 추가돼요.")
+        if !todos.upcoming.isEmpty {
+            let more = ClosureButton(showLater ? "내일 이후 할 일 접기" : "내일 이후 할 일 \(todos.upcoming.count)개 더보기") { [weak self] in
+                self?.showLater.toggle(); self?.reload()
+            }
+            more.isBordered = false; more.font = .systemFont(ofSize: 11); more.contentTintColor = .secondaryLabelColor
+            list.addArrangedSubview(more)
+            if let doc = list.superview { let h = list.fittingSize.height; doc.frame.size.height = max(h, 10); list.frame.size.height = h }
+        }
+        fill(list2, [(nil, events)], empty: "다가오는 일정이 없어요.")
     }
 
     /// 두 번 눌러 고치기: 이름 + 날짜(시간 켜기·끄기, 날짜 빼기)

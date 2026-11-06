@@ -634,6 +634,11 @@ enum KeyRepeat {
     static func fallback(_ key: String) -> Int { key == initial ? 25 : 6 }
     /// 단위는 1/60초(지금 HIDKeyRepeat 33333333ns = 값 2로 확인)
     static func ms(_ value: Int) -> Int { Int((Double(value) * 1000 / 60).rounded()) }
+    /// 적은 ms를 가장 가까운 시스템 값(1/60초 단위)으로, 범위 안으로
+    static func value(ms: Double, _ key: String) -> Int {
+        let r = range(key)
+        return min(max(Int((ms * 60 / 1000).rounded()), r.lowerBound), r.upperBound)
+    }
     static func nanoseconds(_ value: Int) -> Int { value * 1_000_000_000 / 60 }
 
     /// 기억할 원래 값: 이미 기억했으면 그대로, 아니면 지금 값(없으면 -1 = 원래 없음)

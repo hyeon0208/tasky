@@ -684,6 +684,8 @@ enum SelfTest {
               == "1970-01-01T00:00:00Z,1.2,40.0,60,3,4\n" || PerfSampler.csvLine(Date(timeIntervalSince1970: 0), .init(cpu: 1.25, memoryMB: 40, frames: 60, animations: 3, timers: 4)) == "1970-01-01T00:00:00Z,1.3,40.0,60,3,4\n", "CSV 한 줄")
         check(PerfSampler.memoryMB() > 1, "메모리 읽기")
         check(KeyRepeat.ms(15) == 250 && KeyRepeat.ms(2) == 33 && KeyRepeat.nanoseconds(2) == 33_333_333, "ms 변환(1/60초)")
+        check(KeyRepeat.value(ms: 250, KeyRepeat.initial) == 15 && KeyRepeat.value(ms: 40, KeyRepeat.rate) == 2 && KeyRepeat.value(ms: 5, KeyRepeat.initial) == 10
+              && KeyRepeat.value(ms: 0, KeyRepeat.rate) == 1 && KeyRepeat.value(ms: 99999, KeyRepeat.rate) == 120, "적은 ms → 시스템 값(가까운 값·범위)")
         check(KeyRepeat.original(stored: nil, current: 15) == 15 && KeyRepeat.original(stored: 15, current: 10) == 15
               && KeyRepeat.original(stored: nil, current: nil) == -1, "원래 값은 처음 한 번만")
         check(KeyRepeat.restoreValue(-1) == nil && KeyRepeat.restoreValue(15) == 15, "원래 없었으면 지운다")
@@ -729,6 +731,11 @@ enum SelfTest {
             var ev = it("일정", d(11, 3, 11)); ev.isEvent = true
             check(TaskLogic.pending(items + [ev], now: now, calendar: cal).map(\.id) == ["어제", "날만", "지남", "곧", "오늘", "없음"],
                   "남은 할 일: 오늘·날짜 없음, 일정·내일 제외")
+            // 할 일 창 일정: 오늘 + 다음 일정 있는 날만
+            func evIt(_ id: String, _ date: Date) -> TaskItem { var t = it(id, date); t.isEvent = true; return t }
+            let evs = [evIt("어제e", d(11, 2, 9)), evIt("오늘e", d(11, 3, 8)), evIt("모레e1", d(11, 5, 9)), evIt("모레e2", d(11, 5, 18)), evIt("글피e", d(11, 6, 9))]
+            check(TaskLogic.windowEvents(evs + items, now: now, calendar: cal).map(\.id) == ["오늘e", "모레e1", "모레e2"], "할 일 창 일정: 오늘 + 다음 일정 날")
+            check(TaskLogic.windowEvents([evs[2], evs[4]], now: now, calendar: cal).map(\.id) == ["모레e1"], "할 일 창 일정: 오늘 없으면 다음 날만")
             // F32 오늘 끝낸 할 일
             func doneIt(_ id: String, _ at: Date) -> TaskItem { var t = it(id, nil, time: false); t.done = true; t.doneAt = at; return t }
             let startToday = cal.startOfDay(for: now)
@@ -810,6 +817,9 @@ enum SelfTest {
             check(ConvertOp.pdfToDOCX.note == "글자만" && ConvertOp.sheetToPDF.note == "단순 표", "변환: 품질 제한 칸 설명")
             // F33 목표 용량
             check(ConvertOp.shrinks.allSatisfy { ops(["a.png"]).contains($0) && ops(["a.pdf"]).contains($0) } && !ops(["a.mov"]).contains(.shrink1M), "변환: 이미지·PDF에 목표 용량 5개")
+            check(ConvertOp.longs.allSatisfy { ops(["a.png"]).contains($0) } && ConvertOp.longs.map(\.short) == ["3840px", "2560px", "1920px", "1280px", "800px"], "변환: 이미지 크기 5개")
+            check(Converter.reduced((4032, 3024), longEdge: 1920)! == (1920, 1440) && Converter.reduced((1080, 1920), longEdge: 1280)! == (720, 1280)
+                  && Converter.reduced((800, 600), longEdge: 800) == nil, "변환: 해상도 줄이기 크기(세로 사진·이미 작은 것)")
             check(ConvertOp.shrinks.map(\.targetName) == ["500KB", "1MB", "2MB", "5MB", "10MB"] && ConvertOp.shrink1M.targetBytes == 1_000_000, "변환: 목표 용량 10진")
             do {
                 let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-shrink-\(UUID().uuidString)")

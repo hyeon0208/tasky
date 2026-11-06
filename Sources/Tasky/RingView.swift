@@ -335,7 +335,7 @@ final class RingView: NSView {
 }
 
 /// macOS 26 이상에만 있는 시스템 유리. 지금 SDK(15)에는 없어 이름으로 찾는다.
-private let systemGlass = NSClassFromString("NSGlassEffectView") as? NSView.Type
+let systemGlass = NSClassFromString("NSGlassEffectView") as? NSView.Type
 
 /// 유리 바탕: 시스템 유리가 있으면 그것, 없으면 뒤 흐림
 func makeGlass(cornerRadius: CGFloat, frame: CGRect) -> NSView {

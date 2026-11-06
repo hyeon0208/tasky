@@ -896,13 +896,24 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         closeDrawer()
         if dock.isDocked { place(animated: true, out: 1) }
         closeRing()
+        // 서랍 키를 누른 채 오면 변환 대신 서랍(끌던 파일을 서랍 폴더에 놓을 수 있게)
+        if NSEvent.modifierFlags.contains(drawerKey) { wheel.close(); openDrawer(pinned: false); return }
         // F27: 원형 변환 — 곰 위에 둥근 칸
         let center = Geometry.visibleCenter(of: bodyFrame, in: screen.visibleFrame)
         wheel.open(items: convertItems(for: urls), files: urls, center: center, in: screen.visibleFrame, onCenterDrop: { [weak self] in
             self?.say("둘레의 칸 위에 놓아 주세요")
-        }, onParentDrop: { [weak self] in self?.say("칸에 잠깐 올려 두면 목표 용량이 펼쳐져요") })
+        }, onParentDrop: { [weak self] in self?.say("칸에 잠깐 올려 두면 고를 수 있는 칸이 펼쳐져요") })
         petView.react(.fileNear)
+        // 변환 창이 떠 있는 동안 서랍 키를 누르면 변환 창을 닫고 서랍을 연다(끌기 중엔 호버 키 확인이 돌지 않음)
+        wheelKeyTimer?.invalidate()
+        wheelKeyTimer = Ticker.every("변환 창에서 서랍 키 보기", 0.1) { [weak self] t in
+            guard let self, self.wheel.panel != nil, !self.wheel.isWorking else { t.invalidate(); self?.wheelKeyTimer = nil; return }
+            guard NSEvent.modifierFlags.contains(self.drawerKey) else { return }
+            t.invalidate(); self.wheelKeyTimer = nil
+            self.wheel.close(); self.openDrawer(pinned: false)
+        }
     }
+    private var wheelKeyTimer: Timer?
 
     func petFilesDroppedOnBody() {
         wheel.close()
@@ -918,9 +929,17 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         }
         // F33: 목표 용량 5개는 '용량 줄이기' 칸 하나로 묶고, 올려 두면 펼친다
         var items: [WheelItem] = []
-        for op in ops where op.targetBytes == nil || op == ConvertOp.shrinks[0] {
-            items.append(op.targetBytes == nil ? item(op)
-                : WheelItem(title: "용량 줄이기", isFormat: false, detail: "올려 두면\n목표 용량", children: ops.filter { $0.targetBytes != nil }.map(item)) {})
+        // 해상도 5개도 '해상도 줄이기' 칸 하나로 묶는다. 하위 칸은 첫 파일 기준 바뀔 해상도(가로×세로), 이미 작은 것은 뺀다
+        let px = urls.first.flatMap(Converter.pixelSize)
+        let sizes: [WheelItem] = ops.filter { $0.longEdge != nil }.compactMap { op in
+            guard let px else { return item(op) }
+            guard let r = Converter.reduced(px, longEdge: op.longEdge!) else { return nil }
+            return WheelItem(title: "\(r.width)×\(r.height)", isFormat: false, detail: "지금 \(px.width)×\(px.height)\n원본은 그대로") { [weak self] in self?.convert(op, urls) }
+        }
+        for op in ops where (op.targetBytes == nil && op.longEdge == nil) || op == ConvertOp.shrinks[0] || (op == ConvertOp.longs[0] && !sizes.isEmpty) {
+            items.append(op == ConvertOp.shrinks[0] ? WheelItem(title: "용량 줄이기", isFormat: false, detail: "올려 두면\n목표 용량", children: ops.filter { $0.targetBytes != nil }.map(item)) {}
+                : op == ConvertOp.longs[0] ? WheelItem(title: "해상도 줄이기", isFormat: false, detail: px.map { "지금 \($0.width)×\($0.height)\n올려 두면 고르기" } ?? "올려 두면\n해상도 고르기", children: sizes) {}
+                : item(op))
         }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
         if !folders.isEmpty, folders.count == urls.count {
@@ -1136,24 +1155,42 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         func repeatRow(_ key: String) -> NSView {
             let r = KeyRepeat.range(key)
             let value = min(max(KeyRepeat.read(key) ?? KeyRepeat.fallback(key), r.lowerBound), r.upperBound)
-            let ms = hint("")
-            func show(_ v: Int) { ms.stringValue = "약 \(KeyRepeat.ms(v))ms" }
+            // 숫자 칸: ms를 키보드로 적고 ↩(또는 칸을 벗어나면) 적용. 시스템 단위(1/60초)에 맞춰 가장 가까운 값으로 고친다
+            let ms = NSTextField(string: "")
+            ms.alignment = .right
+            ms.widthAnchor.constraint(equalToConstant: 52).isActive = true
+            ms.cell?.sendsActionOnEndEditing = true
+            func show(_ v: Int) { ms.stringValue = "\(KeyRepeat.ms(v))" }
             show(value)
             let slider = NSSlider(value: Double(value),
                                   minValue: Double(r.lowerBound), maxValue: Double(r.upperBound), target: nil, action: nil)
             slider.isContinuous = true
             slider.widthAnchor.constraint(equalToConstant: 150).isActive = true
-            let handler = ClosureButton("") {}
-            handler.handler = { [weak slider] in
-                guard let v = slider.map({ Int($0.doubleValue.rounded()) }) else { return }
+            func apply(_ v: Int) {
                 KeyRepeat.set(key, v)
                 show(v)
                 repeatDemo.restart()
             }
+            let handler = ClosureButton("") {}
+            handler.handler = { [weak slider] in
+                guard let v = slider.map({ Int($0.doubleValue.rounded()) }) else { return }
+                apply(v)
+            }
             slider.target = handler
             slider.action = #selector(ClosureButton.performClick(_:))
-            settingsKeepAlive.append(handler)
-            let row = NSStackView(views: [hint("빠름"), slider, hint("느림"), ms])
+            let typed = ClosureButton("") {}
+            typed.handler = { [weak slider, weak ms] in
+                guard let slider, let ms else { return }
+                let current = Int(slider.doubleValue.rounded())
+                guard let n = Double(ms.stringValue.trimmingCharacters(in: .whitespaces)) else { show(current); return }
+                let v = KeyRepeat.value(ms: n, key)
+                slider.doubleValue = Double(v)
+                if v != current { apply(v) } else { show(v) }
+            }
+            ms.target = typed
+            ms.action = #selector(ClosureButton.performClick(_:))
+            settingsKeepAlive += [handler, typed]
+            let row = NSStackView(views: [hint("빠름"), slider, hint("느림"), ms, hint("ms")])
             row.spacing = 6
             return row
         }
@@ -1579,8 +1616,8 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             [NSView(), NSStackView(views: [evStatus, evOpen])],
             [label("일정 저장할 캘린더"), evList],
             [NSView(), note("'캘린더' 앱에는 '집'·'직장'·Google 계정처럼 캘린더가 여러 개 있어요. 시간이 있는 입력(예: 내일 3시 치과)은 일정으로 저장되는데, 그때 들어갈 캘린더를 고르는 곳이에요. 볼 때는 모든 캘린더를 함께 보여 줘요.")],
-            [label("일정 볼 기간"), choice((1...7).map { "\($0)일" }, selected: TaskStore.eventDays - 1) { TaskStore.eventDays = $0 + 1 }],
-            [NSView(), note("오늘 카드의 '일정' 칸에 오늘부터 며칠 뒤 일정까지 보여 줄지예요.")],
+            [label("일정 볼 기간"), choice((1...7).map { $0 == 1 ? "오늘만" : "오늘부터 \($0)일 이내" }, selected: TaskStore.eventDays - 1) { TaskStore.eventDays = $0 + 1 }],
+            [NSView(), note("오늘 카드의 '일정' 칸에 보일 일정 범위예요. 예: '오늘부터 7일 이내'면 오늘을 포함해 7일 안의 일정이 보여요. 할 일 창은 이 설정과 상관없이 오늘과 다음 일정이 있는 날까지만 보여 줘요.")],
             [label("할 일 알려 주기"), choice(nudges.map { $0 == 0 ? "끄기" : "\($0)분마다" }, selected: nudges.firstIndex(of: TaskStore.nudgeMinutes) ?? 3) { TaskStore.nudgeMinutes = nudges[$0] }],
             [NSView(), note("일정은 1시간 전에 알리고(다시 알려 줄 시간은 알림에서 고름), '알겠어요(알림 끄기)'를 누르지 않았으면 시작할 때 한 번 더 알려 줘요. 남은 할 일은 정한 간격마다 곰 옆에 알려 줘요. macOS 집중 모드가 켜져 있으면 띄우지 않아요.")],
             [label("알릴 때 소리"), SettingsTabs.toggle(TaskStore.soundOn) { TaskStore.soundOn = $0 }],

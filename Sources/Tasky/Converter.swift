@@ -22,6 +22,19 @@ enum ConvertOp: String, CaseIterable {
     case shrink500K, shrink1M, shrink2M, shrink5M, shrink10M
 
     static let shrinks: [ConvertOp] = [.shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M]
+    // 이미지 크기 줄이기: 긴 쪽(가로·세로 중 큰 쪽) 픽셀
+    case long3840, long2560, long800
+    static let longs: [ConvertOp] = [.long3840, .long2560, .long1920, .long1280, .long800]
+    var longEdge: Int? {
+        switch self {
+        case .long3840: 3840
+        case .long2560: 2560
+        case .long1920: 1920
+        case .long1280: 1280
+        case .long800: 800
+        default: nil
+        }
+    }
 
     /// F33 목표 바이트(10진: 1MB = 1,000,000. 제출 사이트가 2진이어도 넘지 않게 작은 쪽)
     var targetBytes: Int? {
@@ -45,8 +58,7 @@ enum ConvertOp: String, CaseIterable {
         case .toJPEG: "JPEG로"
         case .toPNG: "PNG로"
         case .toHEIC: "HEIC로"
-        case .long1920: "긴 변 1920"
-        case .long1280: "긴 변 1280"
+        case .long3840, .long2560, .long1920, .long1280, .long800: "해상도 줄이기(긴 쪽 \(longEdge!)px)"
         case .stripInfo: "위치·촬영 정보 지우기"
         case .removeBackground: "배경 지우기"
         case .extractText: "글자 꺼내기"
@@ -87,7 +99,7 @@ enum ConvertOp: String, CaseIterable {
     var symbol: String {
         switch self {
         case .toJPEG, .toPNG, .toHEIC: "photo"
-        case .long1920, .long1280: "arrow.down.right.and.arrow.up.left"
+        case .long3840, .long2560, .long1920, .long1280, .long800: "arrow.down.right.and.arrow.up.left"
         case .stripInfo: "location.slash"
         case .removeBackground: "person.crop.rectangle"
         case .extractText: "text.viewfinder"
@@ -122,8 +134,7 @@ enum ConvertOp: String, CaseIterable {
         case .toHEIC: "HEIC"
         case .toTIFF: "TIFF"
         case .imagesToPDF: "PDF"
-        case .long1920: "긴 변 1920"
-        case .long1280: "긴 변 1280"
+        case .long3840, .long2560, .long1920, .long1280, .long800: "\(longEdge!)px"
         case .shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M: targetName
         case .stripInfo: "위치정보 빼기"
         case .removeBackground: "배경 빼기"
@@ -256,7 +267,7 @@ enum ConvertOp: String, CaseIterable {
         let exts = Set(urls.map { ConvertOp.normalizedExt($0.pathExtension) })
         let ops: [ConvertOp]
         switch k {
-        case .image: ops = [.toJPEG, .toPNG, .toHEIC, .toTIFF, .imagesToPDF, .long1920, .long1280] + shrinks + [.stripInfo, .removeBackground, .extractText]
+        case .image: ops = [.toJPEG, .toPNG, .toHEIC, .toTIFF, .imagesToPDF] + longs + shrinks + [.stripInfo, .removeBackground, .extractText]
         case .pdf: ops = [.pdfToPNG, .pdfToJPG, .pdfToText, .pdfToDOCX] + (multi ? [.pdfMerge] : []) + shrinks + [.pdfSplit]
         case .video: ops = [.toMP4, .toHEVC, .toMOV, .toGIF, .to720p, .audioOnly] + mp3 + [.posterFrame]
         case .audio: ops = [.toM4A, .toWAV] + mp3 + [.toAIFF]
@@ -311,8 +322,9 @@ enum Converter {
         case .toJPEG: return [try reencode(src, .jpeg, quality: 0.9)]
         case .toPNG: return [try reencode(src, .png, quality: nil)]
         case .toHEIC: return [try reencode(src, .heic, quality: 0.8)]
-        case .long1920: return [try resized(src, longEdge: 1920)]
-        case .long1280: return [try resized(src, longEdge: 1280)]
+        case .long3840, .long2560, .long1920, .long1280, .long800:
+            if let px = pixelSize(src), max(px.width, px.height) <= op.longEdge! { note("지금 \(px.width)×\(px.height), 더 줄일 게 없어요"); return [] }
+            return [try resized(src, longEdge: op.longEdge!)]
         case .stripInfo:
             let image = try loadImage(src, maxPixel: nil)
             let type = UTType(filenameExtension: src.pathExtension.lowercased()) ?? .png
@@ -535,6 +547,23 @@ enum Converter {
 
     // MARK: 이미지
 
+    /// 방향(EXIF 회전)을 적용한 가로·세로 픽셀
+    static func pixelSize(_ url: URL) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        let turned = (5...8).contains(props[kCGImagePropertyOrientation] as? Int ?? 1)
+        return turned ? (h, w) : (w, h)
+    }
+
+    /// 긴 쪽을 `longEdge`로 맞춘 크기(반올림). 이미 작으면 nil
+    static func reduced(_ size: (width: Int, height: Int), longEdge: Int) -> (width: Int, height: Int)? {
+        let long = max(size.width, size.height)
+        guard long > longEdge else { return nil }
+        let k = Double(longEdge) / Double(long)
+        return (max(1, Int((Double(size.width) * k).rounded())), max(1, Int((Double(size.height) * k).rounded())))
+    }
+
     /// 방향(EXIF 회전)을 적용한 이미지. 메타데이터는 따라오지 않는다.
     static func loadImage(_ url: URL, maxPixel: Int?) throws -> CGImage {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -572,7 +601,7 @@ enum Converter {
         let img = try loadImage(src, maxPixel: longEdge)
         let type = UTType(filenameExtension: src.pathExtension.lowercased())
         let outType: UTType = type == .png ? .png : .jpeg
-        return try finalize(writeImage(img, outType, quality: 0.9), from: src, ext: outType.preferredFilenameExtension!)
+        return try finalize(writeImage(img, outType, quality: 0.9), from: src, ext: outType.preferredFilenameExtension!, label: "\(longEdge)px")
     }
 
     static func writeImage(_ img: CGImage, _ type: UTType, quality: Double?) throws -> URL {
