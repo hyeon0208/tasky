@@ -313,6 +313,8 @@ final class KeySwitcher {
         // F28: 손쉬운 사용 권한이 있으면 '거르는' 감지(사용자 결정 2026-11-06). 전환을 마친 뒤에 다음 글자가 앱에 가므로
         // 빠르게 칠 때 첫 글자가 이전 언어로 들어가는 일(씹힘)이 없다. 권한이 없으면 예전처럼 듣기만.
         filtering = AXIsProcessTrusted()
+        nativeSwitch = Self.key == .capsLock && Self.systemShortcutIsF18
+        if Debug.isOn { diag("시스템 단축키가 F18: %@", nativeSwitch ? "예(시스템에 맡김)" : "아니오") }
         guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: filtering ? .defaultTap : .listenOnly,
                                         eventsOfInterest: CGEventMask(mask), callback: { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -342,6 +344,19 @@ final class KeySwitcher {
 
     /// 거르는 감지인지(손쉬운 사용 권한이 있을 때)
     private var filtering = false
+    /// F28: 시스템 '이전/다음 입력 소스' 단축키가 F18이면 F18을 그대로 보내 macOS가 바꾸게 한다.
+    /// 우리가 TISSelectInputSource로 바꾸면 메뉴 막대는 '한'인데 앞 앱(터미널·브라우저)은 영문으로 남는 일이 있었다.
+    private var nativeSwitch = false
+
+    /// 시스템 단축키 60(이전 입력 소스)·61(다음 입력 소스) 중 켜진 것이 수정키 없는 F18(79)인지
+    static var systemShortcutIsF18: Bool {
+        guard let d = UserDefaults(suiteName: "com.apple.symbolichotkeys")?.dictionary(forKey: "AppleSymbolicHotKeys") else { return false }
+        return ["60", "61"].contains { id in
+            guard let e = d[id] as? [String: Any], e["enabled"] as? Bool == true,
+                  let p = (e["value"] as? [String: Any])?["parameters"] as? [Int], p.count == 3 else { return false }
+            return p[1] == 79 && p[2] & ~0x800000 == 0   // F키에 붙는 fn 표시(0x800000)만 허용
+        }
+    }
 
     /// 처리하고, 앱에 보내지 않을 이벤트면 true(거르는 감지에서 Caps→F18 키만 삼킨다. 다른 키는 그대로 보낸다)
     @discardableResult
@@ -376,7 +391,7 @@ final class KeySwitcher {
             }
         }
         // F18(Caps)은 앱에 보내지 않는다(다른 앱이 F18을 받아 엉뚱한 동작을 하지 않게)
-        if filtering && judge.key == .capsLock && (type == .keyDown || type == .keyUp) && code == judge.key.keyCode { return true }
+        if filtering && !nativeSwitch && judge.key == .capsLock && (type == .keyDown || type == .keyUp) && code == judge.key.keyCode { return true }
         // 전환 대기 중에 친 키는 줄에 세웠다가 순서대로 다시 보낸다
         if busy, type == .keyDown || type == .keyUp || type == .flagsChanged, let copy = event.copy() {
             queue.append(.key(copy))
@@ -448,6 +463,7 @@ final class KeySwitcher {
 
     private func act(_ a: SwitchAction?) {
         switch a {
+        case .toggleInput where nativeSwitch: break   // F18을 받은 macOS가 바꾼다
         case .toggleInput, .capsInstead: requestToggle(a!)
         case .toggleCapsLock: Self.toggleCapsLock()
         case nil: break

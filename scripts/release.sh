@@ -50,7 +50,7 @@ fi
 
 [[ $dry == --yes ]] || read -q "?v${v}를 main에 push하고 GitHub Release를 만들까요? [y/N] " || { echo; echo "그만뒀어요"; exit 1; }
 echo
-git commit -q -m "v$v 출시" VERSION
+git diff --quiet VERSION || git commit -q -m "v$v 출시" VERSION   # 첫 출시처럼 이미 같은 버전이면 건너뜀
 trap - EXIT
 git tag v$v
 git push -q origin main v$v
