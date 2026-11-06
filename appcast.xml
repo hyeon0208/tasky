@@ -4,5 +4,14 @@
   <channel>
     <title>Tasky</title>
     <!-- items -->
+    <item>
+      <title>1.0.0</title>
+      <pubDate>Fri, 06 Nov 2026 13:16:33 +0900</pubDate>
+      <sparkle:version>1.0.0</sparkle:version>
+      <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/hyeon0208/tasky/releases/tag/v1.0.0</sparkle:fullReleaseNotesLink>
+      <enclosure url="https://github.com/hyeon0208/tasky/releases/download/v1.0.0/Tasky-1.0.0.zip" sparkle:edSignature="vIffFi8b7TLzRhDLyAncfNDbcG2auLSJt6deM0wqhlwK7Sj+dDQ6ZMy820KIcjEJdl2W3DoZsDT5Dlg0IxXHBg==" length="2152281" type="application/octet-stream"/>
+    </item>
   </channel>
 </rss>
