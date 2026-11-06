@@ -10,7 +10,7 @@ dry=${2:-}
 [[ $v =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] || { echo "버전은 1.2.3 형식이어야 해요"; exit 1; }
 [[ -s scripts/sparkle-public-key ]] || { echo "scripts/sparkle-public-key가 없어요(generate_keys -p 결과를 넣어 주세요)"; exit 1; }
 if [[ $dry != --dry-run ]]; then
-  [[ -z $(git status --porcelain) ]] || { echo "커밋하지 않은 변경이 있어요. 정리한 뒤 다시 실행해 주세요"; exit 1; }
+  [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "커밋하지 않은 변경이 있어요. 정리한 뒤 다시 실행해 주세요"; exit 1; }
   [[ $(git branch --show-current) == main ]] || { echo "main 브랜치에서 실행해 주세요"; exit 1; }
   git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "v$v 태그가 이미 있어요"; exit 1; }
   gh auth status >/dev/null
