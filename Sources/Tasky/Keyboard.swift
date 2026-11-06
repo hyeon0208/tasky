@@ -328,11 +328,16 @@ final class KeySwitcher {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: t, enable: true)
         running = true
+        if srcObserver == nil {   // 실제 입력 소스가 바뀌면 붙잡은 키를 보낸다
+            srcObserver = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil, queue: .main) { [weak self] _ in
+                self?.sourceChanged()
+            }
+        }
     }
 
     /// 감지를 멈추고 Caps Lock을 원래대로(비정상 종료 뒤 남은 바꿈도 여기서 지운다)
     func stop() {
-//        flushQueue()   // 줄에 남은 키를 잃지 않게
+        flushQueue()   // 줄에 남은 키를 잃지 않게
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
@@ -366,11 +371,11 @@ final class KeySwitcher {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
-//        if event.getIntegerValueField(.eventSourceUserData) == Self.repostMark {   // 우리가 다시 보낸 키
-//            inFlight = max(0, inFlight - 1)
-//            if inFlight == 0 { afterPosted() }
-//            return false
-//        }
+        if event.getIntegerValueField(.eventSourceUserData) == Self.repostMark {   // 우리가 다시 보낸 키
+            inFlight = max(0, inFlight - 1)
+            if inFlight == 0 { afterPosted() }
+            return false
+        }
         let code = event.getIntegerValueField(.keyboardEventKeycode)
         if Debug.isOn, type == .keyDown, code == judge.key.keyCode, event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
             let lateMs = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- event.timestamp) / 1_000_000
@@ -392,84 +397,111 @@ final class KeySwitcher {
         }
         // F18(Caps)은 앱에 보내지 않는다(다른 앱이 F18을 받아 엉뚱한 동작을 하지 않게)
         if filtering && !nativeSwitch && judge.key == .capsLock && (type == .keyDown || type == .keyUp) && code == judge.key.keyCode { return true }
-//        // 전환 대기 중에 친 키는 줄에 세웠다가 순서대로 다시 보낸다
-//        if busy, type == .keyDown || type == .keyUp || type == .flagsChanged, let copy = event.copy() {
-//            queue.append(.key(copy))
-//            return true
-//        }
+        // 전환 대기 중에 친 키는 줄에 세웠다가 순서대로 다시 보낸다.
+        // 시스템에 맡길 때(nativeSwitch) F18은 누르기·떼기 모두 바로 보낸다. macOS는 F18을 뗀 뒤에야 바꾸므로
+        // 떼기를 붙잡으면 전환이 아예 일어나지 않았다(진단: 바뀜 알림 없이 시간 초과 38번)
+        let nativeKey = nativeSwitch && code == judge.key.keyCode
+        if busy, !nativeKey, type == .keyDown || type == .keyUp || type == .flagsChanged, let copy = event.copy() {
+            queue.append(.key(copy))
+            return true
+        }
         return false
     }
 
-    // [쓰지 않음 — 나중을 위해 남김] 전환 직후 키 붙잡기(F28, 2026-11-06)
-    // 시스템 단축키가 F18이면 macOS에 맡기므로(nativeSwitch) 필요 없어 주석 처리했다. 단축키가 F18이 아닌 사용자에게
-    // TISSelectInputSource로 바꿀 때 첫 글자 씹힘을 줄여 주지만, 앞 앱이 전환 자체를 놓치는 문제는 못 막는다.
-    // 다시 쓰려면: 아래 블록과 handle()의 '다시 보낸 키'·'줄에 세움' 부분, stop()의 flushQueue() 주석을 풀고
-    // act()의 perform(a!)를 requestToggle(a!)로 바꾼다.
-//    // F28: 다른 앱(터미널·브라우저)은 입력 소스 바뀜을 몇십 ms 늦게 받아, Caps 직후 친 글자가 이전 언어로 들어갔다
-//    // (진단: 키 도착 지연 최대 5ms, 전환 호출 오류 0). 거르는 감지일 때 키와 전환을 한 줄에 세워
-//    // [Caps 앞 키 보냄 → 잠깐 → 전환 → 잠깐 → Caps 뒤 키 보냄] 순서를 지킨다. 다시 보낸 키가 감지를 다시 지나기 전엔
-//    // 새 키도 줄에 세운다(앞질러 '떼기'가 '누르기'보다 먼저 가면 앱이 꾹 누른 걸로 보고 특수 문자 창을 띄웠다).
-//    static let settleTime: TimeInterval = 0.06
-//    private static let repostMark: Int64 = 0x54_41_53_4B   // "TASK": 다시 보낸 이벤트 표시
-//    private enum Queued { case key(CGEvent), toggle(SwitchAction) }
-//    private var queue: [Queued] = []
-//    /// 줄을 처리하는 중(전환 대기·다시 보낸 키 기다림)
-//    private var busy = false
-//    private var inFlight = 0
-//    private var postRound = 0
-//
-//    private func requestToggle(_ a: SwitchAction) {
-//        guard filtering else { perform(a); return }
-//        if busy { queue.append(.toggle(a)); return }
-//        busy = true
-//        perform(a)
-//        Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in self?.pump() }
-//    }
-//
-//    /// 다음 전환 전까지의 키를 보낸다
-//    private func pump() {
-//        var n = 0
-//        while let first = queue.first, case .key(let e) = first {
-//            queue.removeFirst()
-//            e.setIntegerValueField(.eventSourceUserData, value: Self.repostMark)
-//            e.post(tap: .cgSessionEventTap)
-//            n += 1
-//        }
-//        guard n > 0 else { afterPosted(); return }
-//        inFlight += n
-//        postRound += 1
-//        let round = postRound
-//        // 다시 보낸 키가 돌아오지 않아도 키보드가 막히지 않게
-//        Ticker.once("한영 전환 대기", 0.3) { [weak self] _ in
-//            guard let self, self.postRound == round, self.inFlight > 0 else { return }
-//            self.inFlight = 0
-//            self.afterPosted()
-//        }
-//    }
-//
-//    /// 보낸 키가 다 지나간 뒤: 줄 앞이 전환이면 잠깐 두고 전환, 비었으면 대기 끝
-//    private func afterPosted() {
-//        guard busy, inFlight == 0 else { return }
-//        guard let first = queue.first else { busy = false; return }
-//        guard case .toggle(let a) = first else { pump(); return }
-//        queue.removeFirst()
-//        Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in
-//            guard let self else { return }
-//            self.perform(a)
-//            Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in self?.pump() }
-//        }
-//    }
-//
-//    /// 감지를 멈출 때 줄에 남은 키를 잃지 않게 보낸다(전환은 버림)
-//    private func flushQueue() {
-//        for case .key(let e) in queue { e.setIntegerValueField(.eventSourceUserData, value: Self.repostMark); e.post(tap: .cgSessionEventTap) }
-//        queue = []; busy = false; inFlight = 0; postRound += 1
-//    }
+    // F28: 다른 앱(터미널·브라우저)은 입력 소스 바뀜을 몇십 ms 늦게 받아, Caps 직후 친 글자가 이전 언어로 들어갔다
+    // (진단: 키 도착 지연 최대 5ms, 전환 호출 오류 0). 시스템 단축키가 F18이어도 macOS가 늦게 바꿔 같은 일이 났다(타이ㅍld).
+    // 거르는 감지일 때 키와 전환을 한 줄에 세워
+    // [Caps 앞 키 보냄 → 잠깐 → 전환 → 잠깐 → Caps 뒤 키 보냄] 순서를 지킨다. 다시 보낸 키가 감지를 다시 지나기 전엔
+    // 새 키도 줄에 세운다(앞질러 '떼기'가 '누르기'보다 먼저 가면 앱이 꾹 누른 걸로 보고 특수 문자 창을 띄웠다).
+    // 진단: macOS는 F18 뒤 85~160ms에야 입력 소스를 바꿨다(터미널). 고정 60ms로는 모자라 바뀜 알림을 기다린다.
+    static let settleTime: TimeInterval = 0.03
+    /// 바뀜 알림이 안 와도 키보드가 막히지 않게
+    static let switchTimeout: TimeInterval = 0.5
+    private static let repostMark: Int64 = 0x54_41_53_4B   // "TASK": 다시 보낸 이벤트 표시
+    private enum Queued { case key(CGEvent), toggle(SwitchAction) }
+    private var queue: [Queued] = []
+    /// 줄을 처리하는 중(전환 대기·다시 보낸 키 기다림)
+    private var busy = false
+    private var inFlight = 0
+    private var postRound = 0
+
+    private var srcObserver: NSObjectProtocol?
+    private var toggledAt: Date?
+    /// 전환했고 실제 입력 소스가 바뀌기를 기다리는 중
+    private var waitingSource = false
+
+    private func requestToggle(_ a: SwitchAction) {
+        guard filtering else { perform(a); return }
+        if busy { queue.append(.toggle(a)); return }
+        busy = true
+        switchThenPump(a)
+    }
+
+    /// 전환하고, 입력 소스가 실제로 바뀐 뒤(알림 + 잠깐) 붙잡은 키를 보낸다
+    private func switchThenPump(_ a: SwitchAction) {
+        toggledAt = Date()
+        waitingSource = true
+        perform(a)
+        let at = toggledAt
+        Ticker.once("한영 전환 대기", Self.switchTimeout) { [weak self] _ in
+            guard let self, self.waitingSource, self.toggledAt == at else { return }
+            if Debug.isOn { diag("입력 소스 바뀜 알림 없음 — 시간 초과로 보냄") }
+            self.waitingSource = false
+            self.pump()
+        }
+    }
+
+    private func sourceChanged() {
+        if Debug.isOn, let t = toggledAt { diag("입력 소스 바뀜: 전환 뒤 %.0fms", Date().timeIntervalSince(t) * 1000) }
+        guard waitingSource else { return }
+        waitingSource = false
+        Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in self?.pump() }
+    }
+
+    /// 다음 전환 전까지의 키를 보낸다
+    private func pump() {
+        if Debug.isOn, let t = toggledAt { diag("붙잡은 키 보냄: 전환 뒤 %.0fms, %d개", Date().timeIntervalSince(t) * 1000, queue.count) }
+        var n = 0
+        while let first = queue.first, case .key(let e) = first {
+            queue.removeFirst()
+            e.setIntegerValueField(.eventSourceUserData, value: Self.repostMark)
+            e.post(tap: .cgSessionEventTap)
+            n += 1
+        }
+        guard n > 0 else { afterPosted(); return }
+        inFlight += n
+        postRound += 1
+        let round = postRound
+        // 다시 보낸 키가 돌아오지 않아도 키보드가 막히지 않게
+        Ticker.once("한영 전환 대기", 0.3) { [weak self] _ in
+            guard let self, self.postRound == round, self.inFlight > 0 else { return }
+            self.inFlight = 0
+            self.afterPosted()
+        }
+    }
+
+    /// 보낸 키가 다 지나간 뒤: 줄 앞이 전환이면 잠깐 두고 전환, 비었으면 대기 끝
+    private func afterPosted() {
+        guard busy, inFlight == 0 else { return }
+        guard let first = queue.first else { busy = false; return }
+        guard case .toggle(let a) = first else { pump(); return }
+        queue.removeFirst()
+        Ticker.once("한영 전환 대기", Self.settleTime) { [weak self] _ in
+            guard let self else { return }
+            self.switchThenPump(a)
+        }
+    }
+
+    /// 감지를 멈출 때 줄에 남은 키를 잃지 않게 보낸다(전환은 버림)
+    private func flushQueue() {
+        for case .key(let e) in queue { e.setIntegerValueField(.eventSourceUserData, value: Self.repostMark); e.post(tap: .cgSessionEventTap) }
+        queue = []; busy = false; waitingSource = false; inFlight = 0; postRound += 1
+    }
 
     private func act(_ a: SwitchAction?) {
         switch a {
-        case .toggleInput where nativeSwitch: break   // F18을 받은 macOS가 바꾼다
-        case .toggleInput, .capsInstead: perform(a!)
+        case .toggleInput: requestToggle(.toggleInput)
+        case .capsInstead: perform(.capsInstead)
         case .toggleCapsLock: Self.toggleCapsLock()
         case nil: break
         }
@@ -477,7 +509,7 @@ final class KeySwitcher {
 
     private func perform(_ a: SwitchAction) {
         switch a {
-        case .toggleInput: InputSources.toggle()
+        case .toggleInput: if !nativeSwitch { InputSources.toggle() }   // 시스템에 맡기면 F18을 받은 macOS가 바꾼다
         case .toggleCapsLock: Self.toggleCapsLock()
         case .capsInstead: InputSources.toggle(); Self.toggleCapsLock()
         }

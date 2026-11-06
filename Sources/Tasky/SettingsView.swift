@@ -230,6 +230,11 @@ final class SettingsTabs: NSView, NSTableViewDataSource, NSTableViewDelegate {
             let wide = type(of: row[0]) == NSView.self   // 이름 없는 줄
             if wide {
                 let v = row[1]
+                if let t = v as? NSTextField, !t.isEditable {   // 긴 안내가 한 줄로 잘리지 않게
+                    t.lineBreakMode = .byWordWrapping
+                    t.maximumNumberOfLines = 0
+                    t.preferredMaxLayoutWidth = width - 28
+                }
                 v.translatesAutoresizingMaskIntoConstraints = false
                 line.addSubview(v)
                 NSLayoutConstraint.activate([
