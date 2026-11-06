@@ -339,6 +339,12 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
     var showsAgents = true
     var onOpenAgents: () -> Void = {}
 
+    /// F28: 줄에 커서를 올리면 오른쪽 끝에 휴지통(바꿀 수 없는 캘린더는 없음). 누르면 4초 되돌리기 뒤 지움
+    private func trashRow(_ content: NSView, _ item: TaskItem) -> NSView {
+        guard item.ref?.calendar.allowsContentModifications == true else { return content }
+        return TrashRow(content, width: Self.width - 28 - 24) { TaskStore.shared.deleteLater(item) }
+    }
+
     /// 색 제목 + 줄들을 담은 덩어리(F27 4번 B)
     private func block(_ title: String, _ color: NSColor, _ rows: [NSView], onClick: (() -> Void)? = nil) -> NSView {
         let head = label(title, size: 12, weight: .bold, color: color)
@@ -366,7 +372,7 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
                 let b = ClosureButton(item.title) { TaskStore.shared.complete(item) }
                 b.setButtonType(.switch)
                 b.font = .systemFont(ofSize: 13)
-                return b
+                return trashRow(b, item)
             }
             if pending.count > 4 { todos.append(label("외 \(pending.count - 4)개", size: 11, color: .secondaryLabelColor)) }
             if todos.isEmpty { todos = [label(TaskStore.remindersOn ? "남은 할 일이 없어요" : "설정에서 미리 알림을 켜면 보여요", size: 12, color: .secondaryLabelColor)] }
@@ -385,7 +391,7 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
                     guard let row, e.ref?.calendar.allowsContentModifications == true else { NSSound.beep(); return }
                     TaskWindow.shared.edit(e, from: row)
                 }
-                return row
+                return trashRow(row, e)
             }
             if events.count > 4 { evRows.append(label("외 \(events.count - 4)개", size: 11, color: .secondaryLabelColor)) }
             if evRows.isEmpty { evRows = [label(TaskStore.eventsOn ? "\(TaskStore.eventDays)일 안에 일정이 없어요" : "설정에서 캘린더를 켜면 보여요", size: 12, color: .secondaryLabelColor)] }
@@ -554,6 +560,54 @@ final class CheckCircle: NSView {
         work = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
     }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
+/// F28 시안 C: 커서를 올린 줄에만 회색 휴지통(13pt), 휴지통 위에선 빨간색
+final class TrashRow: NSStackView {
+    private let trash: TrashButton
+    init(_ content: NSView, width: CGFloat, onDelete: @escaping () -> Void) {
+        trash = TrashButton(onDelete)
+        super.init(frame: .zero)
+        orientation = .horizontal; spacing = 6
+        content.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        (content as? NSButton)?.cell?.lineBreakMode = .byTruncatingTail
+        let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        setViews([content, spacer, trash], in: .leading)
+        trash.alphaValue = 0
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: width).isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { trash.alphaValue = 1 }
+    override func mouseExited(with event: NSEvent) { trash.alphaValue = 0 }
+}
+
+final class TrashButton: NSButton {
+    private let onDelete: () -> Void
+    init(_ onDelete: @escaping () -> Void) {
+        self.onDelete = onDelete
+        super.init(frame: .zero)
+        isBordered = false; imagePosition = .imageOnly; toolTip = "지우기(4초 안에 되돌릴 수 있어요)"
+        image = NSImage(systemSymbolName: "trash", accessibilityDescription: "지우기")?.withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+        contentTintColor = .secondaryLabelColor
+        target = self; action = #selector(fire)
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    @objc private func fire() { onDelete() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { contentTintColor = .systemRed }
+    override func mouseExited(with event: NSEvent) { contentTintColor = .secondaryLabelColor }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 

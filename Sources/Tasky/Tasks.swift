@@ -282,7 +282,7 @@ final class TaskStore {
                 .map { TaskItem(id: "\($0.eventIdentifier ?? "")@\(Int($0.startDate.timeIntervalSince1970))", title: $0.title ?? "",
                                 date: $0.startDate, hasTime: !$0.isAllDay, isEvent: true, ref: $0) }
         }
-        guard useReminders else { items = events; changed(); return }
+        guard useReminders else { items = events.filter { !deleting.contains($0.id) }; changed(); return }
         store.fetchReminders(matching: store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)) { [weak self] rs in
             let list = (rs ?? []).map { r -> TaskItem in
                 let c = r.dueDateComponents
@@ -292,7 +292,7 @@ final class TaskStore {
             guard let self else { return }
             let start = Calendar.current.startOfDay(for: Date())
             self.store.fetchReminders(matching: self.store.predicateForCompletedReminders(withCompletionDateStarting: start, ending: Date(), calendars: nil)) { done in
-                DispatchQueue.main.async { self.items = events + list; self.doneToday = done?.count ?? 0; self.changed() }
+                DispatchQueue.main.async { self.items = (events + list).filter { !self.deleting.contains($0.id) }; self.doneToday = done?.count ?? 0; self.changed() }
             }
         }
     }
@@ -391,6 +391,28 @@ final class TaskStore {
             r.isCompleted = false
             try? self?.store.save(r, commit: true)
             self?.reload()
+        }
+    }
+
+    /// 지우는 중(4초 되돌리기 동안 목록에서 숨김)
+    private var deleting: Set<String> = []
+
+    /// F28: 오늘 카드의 휴지통. 바로 목록에서 빼고 4초 동안 되돌리기, 지나면 실제로 지운다
+    func deleteLater(_ item: TaskItem) {
+        guard item.ref?.calendar.allowsContentModifications == true else { return }
+        deleting.insert(item.id)
+        items.removeAll { $0.id == item.id }
+        changed()
+        var undone = false
+        DoneToast.show(text: "‘\(item.title)’ 지웠어요", symbol: "trash", underCursor: true) { [weak self] in
+            undone = true
+            self?.deleting.remove(item.id)
+            self?.reload()
+        }
+        Ticker.once("지우기 되돌리기 대기", DoneToast.duration) { [weak self] _ in
+            guard let self, !undone else { return }
+            self.deleting.remove(item.id)
+            self.delete(item)
         }
     }
 
@@ -1064,15 +1086,22 @@ final class DoneToast {
     private static var current: FloatingPanel?
     static func text(_ title: String) -> String { "‘\(title)’ 끝냈어요" }
 
-    static func show(_ title: String, undo: @escaping () -> Void) {
+    static let duration: TimeInterval = 4
+
+    static func show(_ title: String, undo: @escaping () -> Void) { show(text: "✓ " + text(title), undo: undo) }
+
+    /// `symbol`이 있으면 글 앞에 SF Symbol 아이콘. `underCursor`면 커서 바로 아래(큰 화면에서 맨 아래 가운데는 눈에 안 띈다)
+    static func show(text message: String, symbol: String? = nil, underCursor: Bool = false, undo: @escaping () -> Void) {
         current?.orderOut(nil)
-        let label = NSTextField(labelWithString: "✓ " + text(title))
+        let label = NSTextField(labelWithString: message)
         label.font = .systemFont(ofSize: 13, weight: .semibold); label.lineBreakMode = .byTruncatingTail
         label.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         var panel: FloatingPanel?
         let back = ClosureButton("되돌리기") { undo(); panel?.orderOut(nil) }
         back.bezelStyle = .inline
-        let stack = NSStackView(views: [label, back]); stack.spacing = 10
+        var views: [NSView] = [label, back]
+        if let symbol, let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) { views.insert(NSImageView(image: img), at: 0) }
+        let stack = NSStackView(views: views); stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 10)
         let size = stack.fittingSize
         let p = FloatingPanel(size: size)
@@ -1082,10 +1111,13 @@ final class DoneToast {
         p.contentView = root
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main ?? NSScreen.screens[0]
         let v = screen.visibleFrame
-        p.setFrameOrigin(CGPoint(x: v.midX - size.width / 2, y: v.minY + 40))
+        let m = NSEvent.mouseLocation
+        p.setFrameOrigin(underCursor
+            ? CGPoint(x: min(max(m.x - size.width / 2, v.minX + 8), v.maxX - size.width - 8), y: max(m.y - size.height - 24, v.minY + 8))
+            : CGPoint(x: v.midX - size.width / 2, y: v.minY + 40))
         p.orderFrontRegardless()
         panel = p; current = p
-        Ticker.once("완료 토스트 닫기", 4) { _ in if current === p { p.orderOut(nil); current = nil } }
+        Ticker.once("완료 토스트 닫기", duration) { _ in if current === p { p.orderOut(nil); current = nil } }
     }
 }
 
