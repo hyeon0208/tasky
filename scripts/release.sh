@@ -47,7 +47,7 @@ if [[ $dry == --dry-run ]]; then
   echo "--dry-run: appcast 항목(적용 안 함)"; echo "$item"; exit 0
 fi
 
-read -q "?v$v를 main에 push하고 GitHub Release를 만들까요? [y/N] " || { echo; echo "그만뒀어요"; exit 1; }
+read -q "?v${v}를 main에 push하고 GitHub Release를 만들까요? [y/N] " || { echo; echo "그만뒀어요"; exit 1; }
 echo
 git commit -q -m "v$v 출시" VERSION
 trap - EXIT
