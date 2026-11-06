@@ -5,6 +5,15 @@
     <title>Tasky</title>
     <!-- items -->
     <item>
+      <title>1.0.1</title>
+      <pubDate>Fri, 06 Nov 2026 14:20:39 +0900</pubDate>
+      <sparkle:version>1.0.1</sparkle:version>
+      <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/hyeon0208/tasky/releases/tag/v1.0.1</sparkle:fullReleaseNotesLink>
+      <enclosure url="https://github.com/hyeon0208/tasky/releases/download/v1.0.1/Tasky-1.0.1.zip" sparkle:edSignature="yw4zsgTv3ZIVNDt9WzazlS+k8oDDYvL2TM8l1wAJyaAn2daQHAYDNtl+L9u6hNXSjGz9hJ8WnrXYOD8/xiZHDQ==" length="2166494" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>1.0.0</title>
       <pubDate>Fri, 06 Nov 2026 13:16:33 +0900</pubDate>
       <sparkle:version>1.0.0</sparkle:version>
