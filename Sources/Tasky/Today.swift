@@ -344,9 +344,7 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
         let head = label(title, size: 12, weight: .bold, color: color)
         let b = box([head] + rows, spacing: 6)
         if let onClick {
-            let click = NSClickGestureRecognizer(target: ClickTarget.shared, action: #selector(ClickTarget.fire(_:)))
-            ClickTarget.shared.actions[ObjectIdentifier(click)] = onClick
-            b.addGestureRecognizer(click)
+            b.addGestureRecognizer(BlockClick(onClick))
         }
         return b
     }
@@ -354,7 +352,6 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
     /// 입력칸은 창이 열려 있는 동안 그대로 두고, 위·아래 줄만 바꾼다(입력 중 contentView를 다시 만들면 포커스·한글 조합이 끊긴다).
     private func rebuild() {
         guard let p = panel else { return }
-        ClickTarget.shared.actions = [:]   // 다시 그릴 때마다 지난 덩어리 클릭은 비운다
         let now = Date()
         let store = TaskStore.shared
         let pending = TaskLogic.pending(store.items, now: now)
@@ -510,11 +507,17 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
     }
 }
 
-/// 제스처 인식기용 클로저 대상(덩어리 누르기)
-final class ClickTarget: NSObject {
-    static let shared = ClickTarget()
-    var actions: [ObjectIdentifier: () -> Void] = [:]
-    @objc func fire(_ g: NSGestureRecognizer) { actions[ObjectIdentifier(g)]?() }
+/// 덩어리 누르기: 동작을 인식기가 직접 들고 있어 뷰와 함께 사라진다(공유 표에 남던 누수 없앰)
+final class BlockClick: NSClickGestureRecognizer {
+    private let handler: () -> Void
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(target: nil, action: nil)
+        target = self
+        action = #selector(fire)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    @objc private func fire() { handler() }
 }
 
 /// 누르면 동작하는 줄(손가락 커서)

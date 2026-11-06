@@ -889,13 +889,16 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         picker.datePickerElements = c.hasTime ? [.yearMonthDay, .hourMinute] : [.yearMonthDay]
         picker.dateValue = c.date ?? Date()
         picker.sizeToFit()
+        let time = TimeField(syncing: picker)
+        time.isHidden = !c.hasTime
         let timeOn = ClosureButton("시간") {}
         timeOn.setButtonType(.switch)
-        timeOn.handler = { [weak picker, weak timeOn] in
+        timeOn.handler = { [weak picker, weak timeOn, weak time] in
             picker?.datePickerElements = timeOn?.state == .on ? [.yearMonthDay, .hourMinute] : [.yearMonthDay]
+            time?.isHidden = timeOn?.state != .on
         }
         timeOn.state = c.hasTime ? .on : .off
-        let box = NSStackView(views: [picker, timeOn])
+        let box = NSStackView(views: [picker, NSStackView(views: [timeOn, time])])
         box.orientation = .vertical; box.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         box.frame.size = box.fittingSize
         let vc = NSViewController(); vc.view = box
@@ -962,17 +965,21 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         picker.datePickerElements = item.hasTime ? [.yearMonthDay, .hourMinute] : [.yearMonthDay]
         picker.dateValue = item.date ?? Date()
         picker.isHidden = item.date == nil
+        let time = TimeField(syncing: picker)
+        time.isHidden = item.date == nil || !item.hasTime
         let timeOn = ClosureButton("시간") {}
         timeOn.setButtonType(.switch)
         timeOn.state = item.hasTime ? .on : .off
         timeOn.isHidden = item.date == nil
-        timeOn.handler = { [weak picker, weak timeOn] in
+        timeOn.handler = { [weak picker, weak timeOn, weak time] in
             picker?.datePickerElements = timeOn?.state == .on ? [.yearMonthDay, .hourMinute] : [.yearMonthDay]
+            time?.isHidden = timeOn?.state != .on
         }
         hasDate.isHidden = item.isEvent   // 일정은 날짜를 뺄 수 없다
         let problem = NSTextField(labelWithString: "")
         problem.font = .systemFont(ofSize: 11); problem.textColor = .systemRed; problem.isHidden = true
-        let box = NSStackView(views: [name, hasDate, picker, timeOn, problem])
+        let timeRow = NSStackView(views: [timeOn, time])
+        let box = NSStackView(views: [name, hasDate, picker, timeRow, problem])
         box.orientation = .vertical; box.alignment = .leading
         box.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
         let vc = NSViewController(); vc.view = box
@@ -981,6 +988,7 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
         hasDate.handler = { [weak picker, weak timeOn] in
             let on = hasDate.state == .on
             picker?.isHidden = !on; timeOn?.isHidden = !on
+            time.isHidden = !on || timeOn?.state != .on
             fit()
         }
         let save = ClosureButton("저장") { [weak pop, weak name, weak picker, weak timeOn, weak problem] in
@@ -1146,4 +1154,27 @@ final class TaskMini: NSObject {
         f.origin.y += f.height - h; f.size.height = h
         p.setFrame(f, display: true)
     }
+}
+
+/// 시계 그림만으로는 시간을 바꾸기 어려워서 옆에 붙이는 시·분 입력칸(↑↓·숫자 입력). 달력 쪽과 서로 맞춘다
+final class TimeField: NSDatePicker {
+    private weak var other: NSDatePicker?
+    init(syncing other: NSDatePicker) {
+        self.other = other
+        super.init(frame: .zero)
+        datePickerStyle = .textFieldAndStepper
+        datePickerElements = .hourMinute
+        dateValue = other.dateValue
+        target = self; action = #selector(mine)
+        other.target = self; other.action = #selector(theirs)
+        sizeToFit()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    /// 시·분만 바꾸고 날짜는 달력 것을 지킨다
+    @objc private func mine() {
+        guard let other else { return }
+        let cal = Calendar.current, t = cal.dateComponents([.hour, .minute], from: dateValue)
+        other.dateValue = cal.date(bySettingHour: t.hour ?? 0, minute: t.minute ?? 0, second: 0, of: other.dateValue) ?? other.dateValue
+    }
+    @objc private func theirs() { if let other { dateValue = other.dateValue } }
 }

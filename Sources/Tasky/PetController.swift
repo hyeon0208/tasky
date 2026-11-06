@@ -408,10 +408,11 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         updateTaskBadge()
         agentList?.reload()
         if dock.isDocked, ring == nil, !hovering { place(animated: true) } else if let i = petView.island { petView.island = islandContent(expanded: i.expanded) }
-        guard announce, let s, pet.isVisible || App.petsHidden, s.state != .working else { return }
+        // AI 작업 기능이 꺼져 있으면 곰도 반응하지 않는다(짧은 답마다 '끝남' 반응하던 것)
+        guard AgentFeature.enabled, announce, let s, pet.isVisible || App.petsHidden, s.state != .working else { return }
         petView.react(s.state == .waiting ? .jobWaiting : s.state == .failed ? .jobFailed : .jobDone)
         // F27: 패널은 승인이 필요할 때만. 끝남·실패는 상태 구슬과 작업 목록에서 본다
-        guard AgentFeature.enabled, AgentAlert.showsPanel(s.state) else { return }
+        guard AgentAlert.showsPanel(s.state) else { return }
         if dock.isDocked, pet.isVisible {   // 알약: 상태 색 테두리 + 3초 펼침
             alertBorder = s.state.color
             alertOpen = true
@@ -491,6 +492,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     private func updateClock() {
         if standHidden { return }
+        if ring != nil { hideClock(); return }   // 원형 메뉴가 열려 있으면 받침대는 숨긴다(아래 칸과 겹침)
         let overStand = (stand.map { $0.panel.frame.contains(NSEvent.mouseLocation) } ?? false) || (standEvents.panel?.frame.contains(NSEvent.mouseLocation) ?? false)
         let show = pet.isVisible && !dock.isDocked && (ClockMode.current == .always || (ClockMode.current == .hover && (hovering || overStand)))
         guard show else { hideClock(); return }
@@ -792,6 +794,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private func openRing(slots: [Slot], acceptsFiles: Bool, byHover: Bool = false) {
         closeRing()
         hoverWork?.cancel()
+        hideClock()
         if petView.island?.expanded == true { place(animated: false) }   // 펼친 알약에서 열면 먼저 접는다(링은 접힌 알약 기준)
         let v = screen.visibleFrame
         let body = bodyFrame
@@ -873,6 +876,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         panel.delegate = nil
         panel.orderOut(nil)
         if dock.isDocked, !pet.frame.contains(NSEvent.mouseLocation) { place(animated: true) }
+        updateClock()
     }
 
     func windowDidResignKey(_ notification: Notification) {
