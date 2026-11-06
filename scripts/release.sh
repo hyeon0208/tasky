@@ -1,7 +1,8 @@
 #!/bin/zsh
-# Tasky 출시(F29). 사용법: scripts/release.sh 1.0.1 [--dry-run]
+# Tasky 출시(F29). 사용법: scripts/release.sh 1.0.1 [--dry-run|--yes]
 # 버전 올리기 → release 빌드(.app) → .zip·.dmg → Sparkle 서명 → GitHub Release → appcast.xml 갱신·push
 # --dry-run: 파일 만들기와 서명까지만 하고 git·GitHub은 건드리지 않는다.
+# --yes: push 전 확인을 건너뛴다(Claude Code의 `!`처럼 입력을 받을 수 없을 때).
 # Sparkle 개인 키는 키체인에서 읽는다(처음 한 번: .build/artifacts/sparkle/Sparkle/bin/generate_keys).
 set -euo pipefail
 cd "${0:A:h}/.."
@@ -47,7 +48,7 @@ if [[ $dry == --dry-run ]]; then
   echo "--dry-run: appcast 항목(적용 안 함)"; echo "$item"; exit 0
 fi
 
-read -q "?v${v}를 main에 push하고 GitHub Release를 만들까요? [y/N] " || { echo; echo "그만뒀어요"; exit 1; }
+[[ $dry == --yes ]] || read -q "?v${v}를 main에 push하고 GitHub Release를 만들까요? [y/N] " || { echo; echo "그만뒀어요"; exit 1; }
 echo
 git commit -q -m "v$v 출시" VERSION
 trap - EXIT
