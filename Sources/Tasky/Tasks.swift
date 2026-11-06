@@ -1091,15 +1091,18 @@ final class DoneToast {
     static func show(_ title: String, undo: @escaping () -> Void) { show(text: "✓ " + text(title), undo: undo) }
 
     /// `symbol`이 있으면 글 앞에 SF Symbol 아이콘. `underCursor`면 커서 바로 아래(큰 화면에서 맨 아래 가운데는 눈에 안 띈다)
-    static func show(text message: String, symbol: String? = nil, underCursor: Bool = false, undo: @escaping () -> Void) {
+    static func show(text message: String, symbol: String? = nil, underCursor: Bool = false, undo: (() -> Void)? = nil) {
         current?.orderOut(nil)
         let label = NSTextField(labelWithString: message)
         label.font = .systemFont(ofSize: 13, weight: .semibold); label.lineBreakMode = .byTruncatingTail
         label.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         var panel: FloatingPanel?
-        let back = ClosureButton("되돌리기") { undo(); panel?.orderOut(nil) }
-        back.bezelStyle = .inline
-        var views: [NSView] = [label, back]
+        var views: [NSView] = [label]
+        if let undo {
+            let back = ClosureButton("되돌리기") { undo(); panel?.orderOut(nil) }
+            back.bezelStyle = .inline
+            views.append(back)
+        }
         if let symbol, let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) { views.insert(NSImageView(image: img), at: 0) }
         let stack = NSStackView(views: views); stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 10)

@@ -569,6 +569,16 @@ enum SelfTest {
             check(Awake.left(65 * 60) == "남은 1시간 5분", "남은 시간·분")
             check(Awake.left(720 * 60) == "남은 12시간", "남은 시간")
             check(Awake.left(5) == "남은 1분", "1분 미만")
+            // F30 뚜껑 닫아도 깨어 있기
+            check(LidSleep.sudoersLine(user: "kim") == "kim ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1\n", "sudoers 한 줄")
+            check(LidSleep.parseDisabled("System-wide power settings:\n SleepDisabled\t\t1\nCurrently in use:\n") == true, "SleepDisabled 1 읽기")
+            check(LidSleep.parseDisabled(" SleepDisabled\t\t0\n") == false, "SleepDisabled 0 읽기")
+            check(LidSleep.parseDisabled("nothing") == nil, "SleepDisabled 없음")
+            check(!Awake.lidShouldBlock(on: true, checked: false, onAC: true, percent: 90, threshold: 30), "체크 꺼짐이면 안 막음")
+            check(!Awake.lidShouldBlock(on: false, checked: true, onAC: true, percent: 90, threshold: 30), "잠 안 자기 꺼짐이면 안 막음")
+            check(Awake.lidShouldBlock(on: true, checked: true, onAC: true, percent: 5, threshold: 30), "전원 연결이면 기준 무시")
+            check(Awake.lidShouldBlock(on: true, checked: true, onAC: false, percent: 31, threshold: 30), "기준 위면 막음")
+            check(!Awake.lidShouldBlock(on: true, checked: true, onAC: false, percent: 30, threshold: 30), "기준 이하면 풀림")
         }
         // F18 3D 곰: 스프링·모션
         var sp = Spring(stiffness: 120, damping: 14)

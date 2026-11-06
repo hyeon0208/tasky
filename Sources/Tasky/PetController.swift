@@ -1165,6 +1165,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             SettingsTab(id: "snap", title: "창 정리", symbol: "rectangle.split.2x1", content: snapSettings()),
             SettingsTab(id: "capture", title: "화면 캡처", symbol: "camera.viewfinder", content: captureSettings()),
             SettingsTab(id: "tasks", title: "할 일·일정", symbol: "checklist.checked", content: taskSettings()),
+            SettingsTab(id: "awake", title: "잠 안 자기", symbol: "cup.and.saucer", content: awakeSettings()),
         ] + (Debug.isOn ? [SettingsTab(id: "debug", title: "개발자", symbol: "hammer", content: {
                 let d = DebugTab()
                 settingsKeepAlive.append(d)
@@ -1300,6 +1301,48 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     }
 
     /// 설정 '화면 캡처' 탭 (F22)
+    /// F23·F30 잠 안 자기 설정
+    private func awakeSettings() -> NSView {
+        func popup(_ items: [String], selected: Int, _ pick: @escaping (Int) -> Void) -> NSPopUpButton {
+            let p = NSPopUpButton()
+            let menu = NSMenu()
+            for (i, title) in items.enumerated() { menu.addItem(ClosureMenuItem(title) { pick(i) }) }
+            p.menu = menu
+            p.selectItem(at: max(selected, 0))
+            return p
+        }
+        func note(_ t: String) -> NSTextField {
+            let f = NSTextField(wrappingLabelWithString: t)
+            f.font = .systemFont(ofSize: 11); f.textColor = .secondaryLabelColor; f.preferredMaxLayoutWidth = 320
+            return f
+        }
+        let status = note("")
+        let remove = ClosureButton("권한 제거") {}
+        var after: () -> Void = {}
+        let lid = SettingsTabs.toggle(Awake.lidAwake) { on in Awake.setLidAwake(on); after() }
+        func refresh() {
+            let ok = LidSleep.installed
+            status.stringValue = ok ? "관리자 권한이 설치되어 있어요(뚜껑 막기 명령 두 개만)." : "처음 켤 때 관리자 암호를 한 번 물어요."
+            remove.isHidden = !ok
+            lid.state = Awake.lidAwake ? .on : .off
+        }
+        after = refresh
+        remove.handler = { Awake.removePermission(); refresh() }
+        refresh()
+        return SettingsTabs.grid([(nil, [
+            [NSTextField(labelWithString: "기본 시간"),
+             popup(Awake.choices.map(\.title), selected: Awake.choices.firstIndex { $0.minutes == Awake.minutes } ?? 0) { Awake.minutes = Awake.choices[$0].minutes }],
+            [NSView(), note("메뉴 막대 아이콘을 오른쪽 클릭하면 이 시간만큼 켜져요.")],
+            [NSTextField(labelWithString: Awake.lidTitle), lid],
+            [NSView(), note("잠 안 자기가 켜진 동안 뚜껑을 닫아도 Mac이 잠들지 않아요. 닫은 채 가방에 넣으면 뜨거워질 수 있어요.")],
+            [NSTextField(labelWithString: "배터리 보호"),
+             popup(Awake.batteryChoices.map { "\($0)% 아래면 풀기" }, selected: Awake.batteryChoices.firstIndex(of: Awake.lidBattery) ?? 2) {
+                 Awake.lidBattery = Awake.batteryChoices[$0]; Awake.shared.syncLid() }],
+            [NSView(), status],
+            [NSView(), remove],
+        ])])
+    }
+
     private func captureSettings() -> NSView {
         func label(_ t: String) -> NSTextField { NSTextField(labelWithString: t) }
         func note(_ t: String) -> NSTextField {
@@ -1755,6 +1798,7 @@ final class App: NSObject {
             [weak self] _ in
             self?.synth.stop()
             KeySwitcher.shared.stop()
+            Awake.shared.syncLid(quitting: true)
         }
         // F12: 켜 두었으면 감지 시작(권한 창은 띄우지 않음), 꺼져 있으면 비정상 종료 뒤 남은 Caps Lock 바꿈을 지운다
         KeySwitcher.shared.apply()
@@ -1920,6 +1964,14 @@ final class App: NSObject {
         for c in Awake.choices { sub.addItem(ClosureMenuItem(c.title) { Awake.shared.start(minutes: c.minutes) }) }
         sub.addItem(.separator())
         sub.addItem(ClosureMenuItem("끄기") { Awake.shared.stop() })
+        // F30 뚜껑 닫아도 깨어 있기
+        sub.addItem(.separator())
+        sub.addItem(ClosureMenuItem(Awake.lidTitle) { Awake.setLidAwake(!Awake.lidAwake) })
+        let battery = NSMenuItem(title: "배터리 보호", action: nil, keyEquivalent: "")
+        let batSub = NSMenu()
+        for v in Awake.batteryChoices { batSub.addItem(ClosureMenuItem("\(v)%") { Awake.lidBattery = v; Awake.shared.syncLid(); Awake.shared.onChange?() }) }
+        battery.submenu = batSub
+        sub.addItem(battery)
         awake.submenu = sub
         menu.addItem(awake)
         awakeItem = awake
@@ -1970,6 +2022,7 @@ final class App: NSObject {
         statusItem.button?.action = #selector(statusClicked)
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         Awake.shared.onChange = { [weak self] in self?.awakeChanged() }
+        Awake.shared.restoreOnLaunch()
         // F26 메뉴 막대만: 상태 칸 제목(할 일 수 · 다음 일정 · 작업 점)
         App.menuBarAnchor = { [weak self] in
             guard App.petsHidden, let b = self?.statusItem.button, let w = b.window else { return nil }
@@ -2051,8 +2104,10 @@ final class App: NSObject {
         awakeItem?.title = a.end.map { "잠 안 자기 (\(Awake.left($0.timeIntervalSinceNow)))" } ?? (a.isOn ? "잠 안 자기 (켜짐)" : "잠 안 자기")
         for item in awakeItem?.submenu?.items ?? [] {
             let m = Awake.choices.first { $0.title == item.title }?.minutes
+            if item.title == Awake.lidTitle { item.state = Awake.lidAwake ? .on : .off; continue }
             item.state = a.isOn && m == Awake.minutes ? .on : .off
         }
+        for item in awakeItem?.submenu?.items.last?.submenu?.items ?? [] { item.state = item.title == "\(Awake.lidBattery)%" ? .on : .off }
     }
 
     private func awakeChanged() {
