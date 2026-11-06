@@ -750,20 +750,23 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         if from != nil { standHidden = true; stand?.panel.orderOut(nil) }
     }
 
+    /// 원형 메뉴 아이콘 크림색 한 색(media/design/tasky/ring-colors, 2026-11-06)
+    static let ringCream = NSColor(srgbRed: 0xF6 / 255.0, green: 0xEE / 255.0, blue: 0xDC / 255.0, alpha: 1)
+
     /// F27 3번 A: 반원 6칸(오늘 카드·빠른 실행·폴더 서랍·캡처·작업 목록·잠 안 자기). 이름표는 가리킨 칸 하나만.
     /// 빼꼼·그 사이 소식·설정은 메뉴 막대에서.
     private var mainSlots: [Slot] {
         let waitingCount = agents?.waiting ?? 0
         let slots = [
-            Slot(title: pendingTasks.isEmpty ? "오늘 카드" : "오늘 카드 · 할 일 \(pendingTasks.count)", symbol: "sun.max.fill", badge: pendingTasks.isEmpty ? nil : pendingTasks.count, id: "today", color: .systemOrange) { [weak self] in self?.openToday() },
-            Slot(title: "빠른 실행", symbol: "bolt.fill", id: "quickrun", color: .systemYellow) { [weak self] in self?.openQuickRun() },
-            Slot(title: "폴더 서랍", symbol: "folder.fill", id: "drawer", color: .systemBlue) { [weak self] in self?.openDrawer(pinned: false) },
-            Slot(title: "캡처", symbol: "camera.viewfinder", id: "capture", color: .systemPink) { [weak self] in self?.openCaptureStrip() },
-            Slot(title: Awake.shared.isOn ? "잠 안 자기 켜짐" : "잠 안 자기", symbol: "cup.and.saucer.fill", id: "awake", color: .systemBrown) {
+            Slot(title: pendingTasks.isEmpty ? "오늘 카드" : "오늘 카드 · 할 일 \(pendingTasks.count)", symbol: "ring-today", badge: pendingTasks.isEmpty ? nil : pendingTasks.count, id: "today", color: Self.ringCream) { [weak self] in self?.openToday() },
+            Slot(title: "빠른 실행", symbol: "ring-quick", id: "quickrun", color: Self.ringCream) { [weak self] in self?.openQuickRun() },
+            Slot(title: "폴더 서랍", symbol: "ring-drawer", id: "drawer", color: Self.ringCream) { [weak self] in self?.openDrawer(pinned: false) },
+            Slot(title: "캡처", symbol: "ring-capture", id: "capture", color: Self.ringCream) { [weak self] in self?.openCaptureStrip() },
+            Slot(title: Awake.shared.isOn ? "잠 안 자기 켜짐" : "잠 안 자기", symbol: "ring-awake", id: "awake", color: Self.ringCream) {
                 Awake.shared.isOn ? Awake.shared.stop() : Awake.shared.start(minutes: Awake.minutes)
             },
-            Slot(title: "설정", symbol: "gearshape.fill", id: "settings", color: .systemGray) { [weak self] in self?.openSettings() },
-        ] + (AgentFeature.enabled ? [Slot(title: "작업 목록", symbol: "terminal", badge: waitingCount > 0 ? waitingCount : nil, id: "agents", color: .systemGreen) { [weak self] in self?.openAgentList() }] : [])
+            Slot(title: "설정", symbol: "ring-settings", id: "settings", color: Self.ringCream) { [weak self] in self?.openSettings() },
+        ] + (AgentFeature.enabled ? [Slot(title: "작업 목록", symbol: "terminal", badge: waitingCount > 0 ? waitingCount : nil, id: "agents", color: Self.ringCream) { [weak self] in self?.openAgentList() }] : [])
         // F21: 사용자가 옮긴 순서
         let order = RingOrder.apply(saved: UserDefaults.standard.stringArray(forKey: RingOrder.key) ?? [], ids: slots.map(\.id))
         return order.compactMap { id in slots.first { $0.id == id } }
@@ -895,9 +898,9 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         closeRing()
         // F27: 원형 변환 — 곰 위에 둥근 칸
         let center = Geometry.visibleCenter(of: bodyFrame, in: screen.visibleFrame)
-        wheel.open(items: convertItems(for: urls), files: urls, center: center, in: screen.visibleFrame) { [weak self] in
+        wheel.open(items: convertItems(for: urls), files: urls, center: center, in: screen.visibleFrame, onCenterDrop: { [weak self] in
             self?.say("둘레의 칸 위에 놓아 주세요")
-        }
+        }, onParentDrop: { [weak self] in self?.say("칸에 잠깐 올려 두면 목표 용량이 펼쳐져요") })
         petView.react(.fileNear)
     }
 
@@ -909,8 +912,15 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     private let wheel = ConvertWheel()
 
     private func convertItems(for urls: [URL]) -> [WheelItem] {
-        var items = ConvertOp.options(for: urls).map { op in
+        let ops = ConvertOp.options(for: urls)
+        func item(_ op: ConvertOp) -> WheelItem {
             WheelItem(title: op.short, note: op.note, isFormat: op.isFormat, detail: op.title + "\n원본은 그대로") { [weak self] in self?.convert(op, urls) }
+        }
+        // F33: 목표 용량 5개는 '용량 줄이기' 칸 하나로 묶고, 올려 두면 펼친다
+        var items: [WheelItem] = []
+        for op in ops where op.targetBytes == nil || op == ConvertOp.shrinks[0] {
+            items.append(op.targetBytes == nil ? item(op)
+                : WheelItem(title: "용량 줄이기", isFormat: false, detail: "올려 두면\n목표 용량", children: ops.filter { $0.targetBytes != nil }.map(item)) {})
         }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
         if !folders.isEmpty, folders.count == urls.count {
@@ -935,7 +945,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         wheel.showWorking(op.short)
         petView.react(.converting)
         convertingCount += 1
-        Converter.run(op, urls) { [weak self] outputs, errors in
+        Converter.run(op, urls) { [weak self] outputs, errors, notes in
             guard let self else { return }
             if self.wheel.isWorking { self.wheel.close() }   // 그 사이 새로 연 원은 닫지 않는다
             self.convertingCount -= 1
@@ -943,9 +953,12 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             if !outputs.isEmpty {
                 self.conversions = Array((self.conversions + [(Date(), outputs)]).suffix(50))
             }
-            if errors.isEmpty {
+            if errors.isEmpty, let first = notes.first {   // F33: "이미 1MB 이하예요"·"목표에 못 맞췄어요"
+                if !outputs.isEmpty { self.petView.react(.converted) }
+                self.say(notes.count > 1 ? "\(first) 외 \(notes.count - 1)건" : first, seconds: 4)
+            } else if errors.isEmpty {
                 self.petView.react(.converted)
-                self.say("다 바꿨어요. 원본 옆에 ‘(깍지)’로 저장했어요")
+                self.say("다 바꿨어요. 원본 옆에 저장했어요")
             } else {
                 self.say(outputs.isEmpty ? errors[0] : "\(outputs.count)개 성공, \(errors.count)개 실패: \(errors[0])", seconds: 4)
             }
@@ -2001,10 +2014,7 @@ final class App: NSObject {
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // 앱 아이콘의 곰 윤곽(흑백 템플릿, 다크 모드에서 자동 반전). 없으면 체크 기호.
-        // Bundle.module은 묶음을 못 찾으면 앱을 멈추므로 직접 찾는다(.build 밖으로 옮겨도 안전)
-        let res = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0?.appendingPathComponent("Tasky_Tasky.bundle") }
-            .compactMap(Bundle.init(url:)).first
-        let logo = res?.image(forResource: "MenuBarIcon") ?? NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
+        let logo = GlassButton.resources?.image(forResource: "MenuBarIcon") ?? NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
         logo?.isTemplate = true
         logo?.size = NSSize(width: 18, height: 18)
         logo?.accessibilityDescription = "Tasky"

@@ -2,13 +2,14 @@ import AppKit
 import AVFoundation
 import ImageIO
 import PDFKit
+import Quartz
 import UniformTypeIdentifiers
 import Vision
 
 /// 드롭 변환. macOS 기본 프레임워크만 쓴다. 원본은 읽기만 하고, 결과는 임시 파일로 만든 뒤 옮겨서
 /// 실패해도 반쯤 만든 파일이 남지 않는다.
 enum ConvertOp: String, CaseIterable {
-    case toJPEG, toPNG, toHEIC, long1920, long1280, shrink, stripInfo, removeBackground, extractText
+    case toJPEG, toPNG, toHEIC, long1920, long1280, stripInfo, removeBackground, extractText
     case pdfMerge, imagesToPDF, pdfToPNG
     case toMP4, toHEVC, to720p, audioOnly, toGIF
     case toM4A, toWAV, toMP3
@@ -16,7 +17,28 @@ enum ConvertOp: String, CaseIterable {
     case sheetToCSV
     case zip, unarchive
     // F27 9번: 종류별 변환 늘리기
-    case toTIFF, pdfToJPG, pdfToText, pdfShrink, pdfSplit, pdfToDOCX, docToODT, csvToXLSX, sheetToPDF, toMOV, posterFrame, toAIFF
+    case toTIFF, pdfToJPG, pdfToText, pdfSplit, pdfToDOCX, docToODT, csvToXLSX, sheetToPDF, toMOV, posterFrame, toAIFF
+    // F33: 목표 용량으로 줄이기(이미지·PDF)
+    case shrink500K, shrink1M, shrink2M, shrink5M, shrink10M
+
+    static let shrinks: [ConvertOp] = [.shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M]
+
+    /// F33 목표 바이트(10진: 1MB = 1,000,000. 제출 사이트가 2진이어도 넘지 않게 작은 쪽)
+    var targetBytes: Int? {
+        switch self {
+        case .shrink500K: 500_000
+        case .shrink1M: 1_000_000
+        case .shrink2M: 2_000_000
+        case .shrink5M: 5_000_000
+        case .shrink10M: 10_000_000
+        default: nil
+        }
+    }
+    /// "500KB" · "1MB" …
+    var targetName: String {
+        guard let b = targetBytes else { return "" }
+        return b < 1_000_000 ? "\(b / 1000)KB" : "\(b / 1_000_000)MB"
+    }
 
     var title: String {
         switch self {
@@ -25,7 +47,6 @@ enum ConvertOp: String, CaseIterable {
         case .toHEIC: "HEIC로"
         case .long1920: "긴 변 1920"
         case .long1280: "긴 변 1280"
-        case .shrink: "용량 줄이기"
         case .stripInfo: "위치·촬영 정보 지우기"
         case .removeBackground: "배경 지우기"
         case .extractText: "글자 꺼내기"
@@ -51,8 +72,8 @@ enum ConvertOp: String, CaseIterable {
         case .toTIFF: "TIFF로"
         case .pdfToJPG: "페이지를 JPG로"
         case .pdfToText: "글자만 TXT로"
-        case .pdfShrink: "PDF 용량 줄이기"
         case .pdfSplit: "페이지마다 PDF로"
+        case .shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M: "\(targetName) 이하로 줄이기"
         case .pdfToDOCX: "Word(DOCX)로 (글자만)"
         case .docToODT: "ODT로"
         case .csvToXLSX: "엑셀(XLSX)로"
@@ -67,7 +88,6 @@ enum ConvertOp: String, CaseIterable {
         switch self {
         case .toJPEG, .toPNG, .toHEIC: "photo"
         case .long1920, .long1280: "arrow.down.right.and.arrow.up.left"
-        case .shrink: "arrow.down.circle"
         case .stripInfo: "location.slash"
         case .removeBackground: "person.crop.rectangle"
         case .extractText: "text.viewfinder"
@@ -85,7 +105,7 @@ enum ConvertOp: String, CaseIterable {
         case .toTIFF: "photo"
         case .pdfToJPG: "doc.richtext"
         case .pdfToText, .pdfToDOCX, .docToODT: "doc.text"
-        case .pdfShrink: "arrow.down.circle"
+        case .shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M: "arrow.down.circle"
         case .pdfSplit: "doc.on.doc"
         case .csvToXLSX, .sheetToPDF: "tablecells"
         case .toMOV: "film"
@@ -104,7 +124,7 @@ enum ConvertOp: String, CaseIterable {
         case .imagesToPDF: "PDF"
         case .long1920: "긴 변 1920"
         case .long1280: "긴 변 1280"
-        case .shrink, .pdfShrink: "용량 줄이기"
+        case .shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M: targetName
         case .stripInfo: "위치정보 빼기"
         case .removeBackground: "배경 빼기"
         case .extractText: "글자 꺼내기"
@@ -142,7 +162,6 @@ enum ConvertOp: String, CaseIterable {
         switch self {
         case .toPNG: "투명 유지"
         case .imagesToPDF: "한 파일로"
-        case .shrink: "JPEG 60%"
         case .stripInfo: "GPS·촬영 정보"
         case .removeBackground: "투명 PNG"
         case .extractText: "TXT로"
@@ -237,8 +256,8 @@ enum ConvertOp: String, CaseIterable {
         let exts = Set(urls.map { ConvertOp.normalizedExt($0.pathExtension) })
         let ops: [ConvertOp]
         switch k {
-        case .image: ops = [.toJPEG, .toPNG, .toHEIC, .toTIFF, .imagesToPDF, .long1920, .long1280, .shrink, .stripInfo, .removeBackground, .extractText]
-        case .pdf: ops = [.pdfToPNG, .pdfToJPG, .pdfToText, .pdfToDOCX] + (multi ? [.pdfMerge] : []) + [.pdfShrink, .pdfSplit]
+        case .image: ops = [.toJPEG, .toPNG, .toHEIC, .toTIFF, .imagesToPDF, .long1920, .long1280] + shrinks + [.stripInfo, .removeBackground, .extractText]
+        case .pdf: ops = [.pdfToPNG, .pdfToJPG, .pdfToText, .pdfToDOCX] + (multi ? [.pdfMerge] : []) + shrinks + [.pdfSplit]
         case .video: ops = [.toMP4, .toHEVC, .toMOV, .toGIF, .to720p, .audioOnly] + mp3 + [.posterFrame]
         case .audio: ops = [.toM4A, .toWAV] + mp3 + [.toAIFF]
         case .document: ops = [.docToPDF, .docToDOCX, .docToTXT, .docToRTF, .docToHTML, .docToODT]
@@ -265,17 +284,17 @@ enum Converter {
     }()
     private static let nameLock = NSLock()
 
-    /// 변환을 돌리고, 끝나면 메인 스레드에서 결과 파일들과 실패 메시지를 돌려준다.
-    static func run(_ op: ConvertOp, _ urls: [URL], done: @escaping ([URL], [String]) -> Void) {
+    /// 변환을 돌리고, 끝나면 메인 스레드에서 결과 파일들과 실패 메시지, 알림("이미 작아요" 등, F33)을 돌려준다.
+    static func run(_ op: ConvertOp, _ urls: [URL], done: @escaping ([URL], [String], [String]) -> Void) {
         let batches = op.combines ? [urls] : urls.map { [$0] }
         let group = DispatchGroup()
         let lock = NSLock()
-        var outputs: [URL] = [], errors: [String] = []
+        var outputs: [URL] = [], errors: [String] = [], notes: [String] = []
         for batch in batches {
             group.enter()
             queue.addOperation {
                 do {
-                    let made = try convert(op, batch)
+                    let made = try convert(op, batch) { n in lock.withLock { notes.append("\(batch[0].lastPathComponent): \(n)") } }
                     lock.withLock { outputs += made }
                 } catch {
                     lock.withLock { errors.append("\(batch[0].lastPathComponent): \(error.localizedDescription)") }
@@ -283,10 +302,10 @@ enum Converter {
                 group.leave()
             }
         }
-        group.notify(queue: .main) { done(outputs, errors) }
+        group.notify(queue: .main) { done(outputs, errors, notes) }
     }
 
-    static func convert(_ op: ConvertOp, _ urls: [URL]) throws -> [URL] {
+    static func convert(_ op: ConvertOp, _ urls: [URL], note: (String) -> Void = { _ in }) throws -> [URL] {
         let src = urls[0]
         switch op {
         case .toJPEG: return [try reencode(src, .jpeg, quality: 0.9)]
@@ -294,7 +313,6 @@ enum Converter {
         case .toHEIC: return [try reencode(src, .heic, quality: 0.8)]
         case .long1920: return [try resized(src, longEdge: 1920)]
         case .long1280: return [try resized(src, longEdge: 1280)]
-        case .shrink: return [try reencode(src, .jpeg, quality: 0.6)]
         case .stripInfo:
             let image = try loadImage(src, maxPixel: nil)
             let type = UTType(filenameExtension: src.pathExtension.lowercased()) ?? .png
@@ -371,11 +389,8 @@ enum Converter {
             let tmp = tempURL(ext: "docx")
             try data.write(to: tmp)
             return [try finalize(tmp, from: src, ext: "docx")]
-        case .pdfShrink:
-            guard let doc = PDFDocument(url: src) else { throw ConvertError("PDF를 열 수 없어요") }
-            let tmp = tempURL(ext: "pdf")
-            guard doc.write(to: tmp, withOptions: [.saveImagesAsJPEGOption: true, .optimizeImagesForScreenOption: true]) else { throw ConvertError("PDF를 저장하지 못했어요") }
-            return [try finalize(tmp, from: src, ext: "pdf", label: "작게")]
+        case .shrink500K, .shrink1M, .shrink2M, .shrink5M, .shrink10M:
+            return ConvertOp.kind(of: src) == .pdf ? try shrinkPDF(src, op, note: note) : try shrinkImage(src, op, note: note)
         case .pdfSplit:
             guard let doc = PDFDocument(url: src), doc.pageCount > 0 else { throw ConvertError("PDF를 열 수 없어요") }
             return try (0..<doc.pageCount).map { i in
@@ -407,6 +422,115 @@ enum Converter {
             catch { try? FileManager.default.removeItem(at: dir); throw ConvertError("압축을 풀지 못했어요") }
             return [try finalize(dir, from: src, ext: "")]
         }
+    }
+
+    // MARK: F33 목표 용량으로 줄이기
+
+    private static func fileSize(_ url: URL) -> Int { (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
+    static func sizeText(_ n: Int) -> String { ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
+
+    /// JPEG 품질을 낮추고(30%까지), 그래도 크면 긴 변을 0.8배씩(800px까지) 줄여 목표 아래로. 투명은 흰 배경.
+    private static func shrinkImage(_ src: URL, _ op: ConvertOp, note: (String) -> Void) throws -> [URL] {
+        let target = op.targetBytes!
+        if fileSize(src) <= target { note("이미 \(op.targetName) 이하예요"); return [] }
+        let image = try loadImage(src, maxPixel: nil)
+        let long = max(image.width, image.height)
+        func flat(_ edge: Int) -> CGImage? {
+            let k = Double(edge) / Double(long)
+            let w = max(1, Int(Double(image.width) * k)), h = max(1, Int(Double(image.height) * k))
+            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+            ctx.setFillColor(.white); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.interpolationQuality = .high
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return ctx.makeImage()
+        }
+        func jpeg(_ img: CGImage, _ q: Double) -> Data? {
+            let data = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: q] as CFDictionary)
+            return CGImageDestinationFinalize(dest) ? data as Data : nil
+        }
+        var smallest: Data?
+        var edge = long, found: Data?
+        while found == nil {
+            if let img = flat(edge), let low = jpeg(img, 0.3) {
+                if low.count < smallest?.count ?? .max { smallest = low }
+                if low.count <= target {
+                    // 목표 아래에서 가장 높은 품질(0.3~0.9 이분 탐색 5번)
+                    var lo = 0.3, hi = 0.9, best = low
+                    for _ in 0..<5 {
+                        let mid = (lo + hi) / 2
+                        if let d = jpeg(img, mid), d.count <= target { best = d; lo = mid } else { hi = mid }
+                    }
+                    found = best
+                }
+            }
+            let next = Int(Double(edge) * 0.8)
+            if found != nil || edge <= min(long, 800) { break }
+            edge = max(next, min(long, 800))
+        }
+        guard let data = found ?? smallest else { throw ConvertError("이미지를 저장하지 못했어요") }
+        if data.count >= fileSize(src) { note("더 줄이지 못했어요 (\(sizeText(fileSize(src))))"); return [] }
+        if found == nil { note("목표에 못 맞췄어요 (\(sizeText(data.count)))") }
+        let tmp = tempURL(ext: "jpg")
+        try data.write(to: tmp)
+        return [try finalize(tmp, from: src, ext: "jpg", label: "\(op.targetName) 이하")]
+    }
+
+    /// 안의 이미지를 다시 압축(QuartzFilter, 글자·벡터 유지) → 그래도 크면 쪽을 그림으로 바꿔 목표 아래로.
+    private static func shrinkPDF(_ src: URL, _ op: ConvertOp, note: (String) -> Void) throws -> [URL] {
+        let target = op.targetBytes!
+        if fileSize(src) <= target { note("이미 \(op.targetName) 이하예요"); return [] }
+        guard let doc = PDFDocument(url: src), doc.pageCount > 0 else { throw ConvertError("PDF를 열 수 없어요") }
+        var smallest: (url: URL, size: Int, raster: Bool)?
+        var tried: [URL] = []
+        defer { for u in tried where u != smallest?.url { try? FileManager.default.removeItem(at: u) } }
+        func keep(_ url: URL, raster: Bool) -> Bool {
+            guard PDFDocument(url: url)?.pageCount == doc.pageCount else { return false }
+            let n = fileSize(url)
+            if n < smallest?.size ?? .max { smallest = (url, n, raster) }
+            return n <= target
+        }
+        var done = false
+        for (q, dpi) in [(0.75, 150.0), (0.5, 150.0), (0.5, 100.0), (0.3, 72.0)] where !done {
+            let filter = QuartzFilter(properties: [
+                "Domains": ["Applications": true, "Printing": true], "FilterType": 1, "Name": "Tasky",
+                "FilterData": ["ColorSettings": ["ImageSettings": [
+                    "Compression Quality": q, "ImageCompression": "ImageJPEGCompress",
+                    "ImageScaleSettings": ["ImageResolution": dpi, "ImageScaleFactor": 0.0, "ImageScaleInterpolate": 3, "ImageSizeMax": 0, "ImageSizeMin": 0]]]]])
+            let tmp = tempURL(ext: "pdf")
+            tried.append(tmp)
+            guard let filter, PDFDocument(url: src)?.write(to: tmp, withOptions: [PDFDocumentWriteOption(rawValue: "QuartzFilter"): filter]) == true else { continue }
+            done = keep(tmp, raster: false)
+        }
+        // 긴 변 픽셀 상한도 둔다: 'PDF 하나로'로 만든 PDF는 쪽 크기가 사진 픽셀 크기라 dpi만으로는 줄지 않는다
+        for (dpi, q, cap) in [(150.0, 0.6, 2000.0), (110.0, 0.5, 1500.0), (80.0, 0.4, 1100.0), (60.0, 0.3, 800.0)] where !done {
+            let out = PDFDocument()
+            for i in 0..<doc.pageCount {
+                guard let page = doc.page(at: i) else { continue }
+                var box = page.bounds(for: .mediaBox)
+                if page.rotation % 180 != 0 { box.size = CGSize(width: box.height, height: box.width) }   // thumbnail은 회전을 적용해 그린다
+                let k = min(dpi / 72, cap / max(box.width, box.height))
+                let img = page.thumbnail(of: CGSize(width: box.width * k, height: box.height * k), for: .mediaBox)
+                guard let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
+                let data = NSMutableData()
+                guard let dest = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { continue }
+                CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: q] as CFDictionary)
+                guard CGImageDestinationFinalize(dest), let jpg = NSImage(data: data as Data) else { continue }
+                jpg.size = box.size
+                if let p = PDFPage(image: jpg) { out.insert(p, at: out.pageCount) }
+            }
+            let tmp = tempURL(ext: "pdf")
+            tried.append(tmp)
+            guard out.write(to: tmp) else { continue }
+            done = keep(tmp, raster: true)
+        }
+        guard let best = smallest else { throw ConvertError("PDF를 저장하지 못했어요") }
+        if best.size >= fileSize(src) { note("더 줄이지 못했어요 (\(sizeText(fileSize(src))))"); smallest = nil; return [] }
+        if best.raster { note("글자를 선택·검색할 수 없게 됐어요") }
+        if !done { note("목표에 못 맞췄어요 (\(sizeText(best.size)))") }
+        return [try finalize(best.url, from: src, ext: "pdf", label: "\(op.targetName) 이하")]
     }
 
     // MARK: 이미지
@@ -645,7 +769,7 @@ enum Converter {
         FileManager.default.temporaryDirectory.appendingPathComponent("tasky-\(UUID().uuidString).\(ext)")
     }
 
-    /// 임시 결과를 원본 옆 `이름 (깍지).확장자`로 옮긴다. 겹치면 `(깍지 2)`.
+    /// 임시 결과를 원본 옆 `이름 라벨.확장자`로 옮긴다. 원본·기존 파일과 겹치면 `이름 라벨 2`(원본은 덮어쓰지 않음).
     /// 원본 폴더에 쓸 수 없으면 다운로드 폴더로.
     static func finalize(_ tmp: URL, from src: URL, ext: String, label: String? = nil) throws -> URL {
         let fm = FileManager.default
@@ -656,7 +780,7 @@ enum Converter {
         let base = src.deletingPathExtension().lastPathComponent + (label.map { " \($0)" } ?? "")
         nameLock.lock(); defer { nameLock.unlock() }
         for n in 1...999 {
-            let name = "\(base) (깍지\(n == 1 ? "" : " \(n)"))"
+            let name = n == 1 ? base : "\(base) \(n)"
             let target = dir.appendingPathComponent(ext.isEmpty ? name : "\(name).\(ext)")
             if fm.fileExists(atPath: target.path) { continue }
             do {

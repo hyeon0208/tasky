@@ -364,6 +364,10 @@ final class GlassButton: NSView {
     /// F26: 아이콘 색. 있으면 밝은 유리에 색 아이콘(시안), 없으면 예전처럼 어두운 유리에 흰 아이콘
     private let color: NSColor?
 
+    /// 앱 리소스 묶음. Bundle.module은 묶음을 못 찾으면 앱을 멈추므로 직접 찾는다(.build 밖으로 옮겨도 안전)
+    static let resources = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0?.appendingPathComponent("Tasky_Tasky.bundle") }
+        .compactMap(Bundle.init(url:)).first
+
     init(diameter d: CGFloat, symbol: String, title: String, accent: Bool, badge: Int?, color: NSColor? = nil) {
         self.accent = accent
         self.color = color
@@ -427,8 +431,15 @@ final class GlassButton: NSView {
         addSubview(overlay)
 
         let icon = NSImageView(frame: bounds)
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(.init(pointSize: 18, weight: .semibold).applying(.preferringHierarchical()))
+        // 원형 메뉴 둥근 선 아이콘(media/design/tasky/ring-colors, 24pt SVG)이 묶음에 있으면 그것, 없으면 SF Symbol
+        if let svg = Self.resources?.image(forResource: symbol) {
+            svg.isTemplate = true
+            svg.accessibilityDescription = title
+            icon.image = svg
+        } else {
+            icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+                .withSymbolConfiguration(.init(pointSize: 18, weight: .semibold).applying(.preferringHierarchical()))
+        }
         icon.contentTintColor = color ?? .white   // 시안: 흰 아이콘 + 아래 그림자 / F26: 밝은 유리에 색 아이콘
         icon.imageScaling = .scaleNone
         icon.shadow = {

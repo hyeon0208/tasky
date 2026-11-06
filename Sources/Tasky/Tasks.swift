@@ -114,6 +114,8 @@ struct TaskItem {
     var ref: EKCalendarItem?
     /// 끝낸 할 일(빠른 실행 검색에서만 씀)
     var done = false
+    /// F32: 끝낸 시각(오늘 끝낸 할 일 정렬·날짜 판정)
+    var doneAt: Date? = nil
 }
 
 enum TaskLogic {
@@ -136,6 +138,12 @@ enum TaskLogic {
             guard item.hasTime, let t = snoozed[item.id] ?? item.date, let key = alertKey(item, at: t) else { return false }
             return t >= now.addingTimeInterval(-120) && t < now.addingTimeInterval(60) && !alerted.contains(key)
         }
+    }
+
+    /// F32: 오늘(자정 이후) 끝낸 할 일, 최근에 끝낸 것부터
+    static func doneToday(_ items: [TaskItem], now: Date, calendar: Calendar = .current) -> [TaskItem] {
+        let start = calendar.startOfDay(for: now)
+        return items.filter { ($0.doneAt ?? .distantPast) >= start }.sorted { $0.doneAt! > $1.doneAt! }
     }
 
     /// 남은 할 일: 오늘(지난 것 포함)·날짜 없는 할 일(일정 제외), 오늘 것 먼저
@@ -194,8 +202,10 @@ final class TaskStore {
     static let shared = TaskStore()
     let store = EKEventStore()
     private(set) var items: [TaskItem] = []
+    /// F32: 오늘 끝낸 미리 알림(취소선 줄). 알림·남은 수 계산이 쓰는 `items`와 섞지 않는다
+    private(set) var doneItems: [TaskItem] = []
     /// 오늘 끝낸 미리 알림 수(할 일 창 진행 막대)
-    private(set) var doneToday = 0
+    var doneToday: Int { doneItems.count }
     var onChange: () -> Void = {}
     private var observing = false
 
@@ -256,6 +266,8 @@ final class TaskStore {
         if !observing, Self.anyOn {
             observing = true
             NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in self?.reload() }
+            // F32: 자정이 지나면 어제 끝낸 것·진행률을 바로 바꾼다
+            NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in self?.reload() }
         }
         TaskAlerts.shared.apply()
         reload()
@@ -282,7 +294,7 @@ final class TaskStore {
                 .map { TaskItem(id: "\($0.eventIdentifier ?? "")@\(Int($0.startDate.timeIntervalSince1970))", title: $0.title ?? "",
                                 date: $0.startDate, hasTime: !$0.isAllDay, isEvent: true, ref: $0) }
         }
-        guard useReminders else { items = events.filter { !deleting.contains($0.id) }; changed(); return }
+        guard useReminders else { items = events.filter { !deleting.contains($0.id) }; doneItems = []; changed(); return }
         store.fetchReminders(matching: store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)) { [weak self] rs in
             let list = (rs ?? []).map { r -> TaskItem in
                 let c = r.dueDateComponents
@@ -292,7 +304,16 @@ final class TaskStore {
             guard let self else { return }
             let start = Calendar.current.startOfDay(for: Date())
             self.store.fetchReminders(matching: self.store.predicateForCompletedReminders(withCompletionDateStarting: start, ending: Date(), calendars: nil)) { done in
-                DispatchQueue.main.async { self.items = (events + list).filter { !self.deleting.contains($0.id) }; self.doneToday = done?.count ?? 0; self.changed() }
+                let doneList = (done ?? []).map { r -> TaskItem in
+                    let c = r.dueDateComponents
+                    return TaskItem(id: r.calendarItemIdentifier, title: r.title ?? "", date: c.flatMap { Calendar.current.date(from: $0) },
+                                    hasTime: c?.hour != nil, isEvent: false, ref: r, done: true, doneAt: r.completionDate)
+                }
+                DispatchQueue.main.async {
+                    self.items = (events + list).filter { !self.deleting.contains($0.id) }
+                    self.doneItems = doneList.filter { !self.deleting.contains($0.id) }
+                    self.changed()
+                }
             }
         }
     }
@@ -392,6 +413,14 @@ final class TaskStore {
             try? self?.store.save(r, commit: true)
             self?.reload()
         }
+    }
+
+    /// F32: 취소선 줄의 체크를 풀면 완료를 풀어 원래 자리로
+    func uncomplete(_ item: TaskItem) {
+        guard let r = item.ref as? EKReminder else { return }
+        r.isCompleted = false
+        try? store.save(r, commit: true)
+        reload()
     }
 
     /// 지우는 중(4초 되돌리기 동안 목록에서 숨김)
@@ -968,7 +997,7 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
             doc.frame.size = CGSize(width: width, height: max(size.height, 10))
             l.frame = CGRect(x: 0, y: 0, width: width, height: size.height)
         }
-        fill(list, [(nil, g.today), ("날짜 없음", g.undated)], empty: "비어 있어요. 아래에 적고 ↩를 누르면 추가돼요.")
+        fill(list, [(nil, g.today), ("날짜 없음", g.undated), ("끝냄", TaskLogic.doneToday(store.doneItems, now: Date()))], empty: "비어 있어요. 아래에 적고 ↩를 누르면 추가돼요.")
         fill(list2, [(nil, g.upcoming)], empty: "다가오는 일이 없어요.")
     }
 
@@ -1045,11 +1074,17 @@ final class TaskWindow: NSObject, NSTextFieldDelegate {
     }
 
     private func row(_ item: TaskItem) -> NSView {
-        let overdue = (item.date.map { item.hasTime ? $0 < Date() : $0 < Calendar.current.startOfDay(for: Date()) } ?? false) && !item.isEvent
+        let overdue = (item.date.map { item.hasTime ? $0 < Date() : $0 < Calendar.current.startOfDay(for: Date()) } ?? false) && !item.isEvent && !item.done
         let lead: NSView = item.isEvent
             ? NSImageView(image: NSImage(systemSymbolName: "calendar", accessibilityDescription: "일정")!)
-            : { let b = ClosureButton("") { TaskStore.shared.complete(item) }; b.setButtonType(.switch); return b }()
+            : { // F32: 끝낸 줄은 체크된 채, 누르면 완료를 푼다
+                let b = ClosureButton("") { item.done ? TaskStore.shared.uncomplete(item) : TaskStore.shared.complete(item) }
+                b.setButtonType(.switch); b.state = item.done ? .on : .off; return b }()
         let title = NSTextField(labelWithString: item.title)
+        if item.done {
+            title.attributedStringValue = NSAttributedString(string: item.title, attributes: [.font: title.font ?? .systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor,
+                                                                                               .strikethroughStyle: NSUnderlineStyle.single.rawValue])
+        }
         title.lineBreakMode = .byTruncatingTail
         title.widthAnchor.constraint(lessThanOrEqualToConstant: Self.column - 130).isActive = true
         let time = NSTextField(labelWithString: item.date.map { Self.timeText($0, hasTime: item.hasTime) } ?? "")

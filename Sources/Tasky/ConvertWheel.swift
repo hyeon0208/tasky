@@ -10,6 +10,8 @@ struct WheelItem {
     var isFormat = true
     /// 칸에 올렸을 때 가운데 원에 보일 설명
     var detail: String = ""
+    /// F33: 올려 두면 바깥으로 펼쳐지는 하위 칸(목표 용량)
+    var children: [WheelItem] = []
     let action: () -> Void
 }
 
@@ -42,6 +44,17 @@ enum WheelMath {
         return ring(formats, inner) + ring(actions, outer)
     }
 
+    /// F33: 부모 칸 바깥에 칸당 16°로 펼친 하위 칸. 반원(span < 360)이면 [start - span, start] 안으로 밀어 넣는다
+    static let childGap: CGFloat = 6, childDepth: CGFloat = 58
+    static func children(of parent: Wedge, count: Int, start: Double, span: Double) -> [Wedge] {
+        guard count > 0 else { return [] }
+        let step = 16.0, total = step * Double(count)
+        var top = (parent.a0 + parent.a1) / 2 + total / 2
+        if span < 360 { top = min(start, max(start - span + total, top)) }
+        let r0 = parent.r1 + childGap
+        return (0..<count).map { i in Wedge(r0: r0, r1: r0 + childDepth, a0: top - Double(i) * step, a1: top - Double(i + 1) * step) }
+    }
+
     static func outerRadius(_ wedges: [Wedge]) -> CGFloat { wedges.map(\.r1).max() ?? single.r1 }
 
     /// 가운데에서 `p`만큼 떨어진 점이 몇 번 칸인지(칸 사이 틈은 이웃 칸으로 봐 손떨림에 너그럽게)
@@ -68,6 +81,13 @@ final class ConvertWheelView: NSView {
     var working: String? { didSet { needsDisplay = true; spin() } }
     var onPick: (Int) -> Void = { _ in }
     var onCenterDrop: () -> Void = {}
+    /// F33: 자식 칸이 있는 부모 칸에 놓았을 때
+    var onParentDrop: () -> Void = {}
+    var arc: (start: Double, span: Double) = (90, 360)
+    /// 펼친 부모 칸 번호와 그 자식 칸 자리
+    private var expanded: Int?
+    private var childWedges: [WheelMath.Wedge] = []
+    private var expandTimer: Timer?
     private var angle: CGFloat = 0
     private var spinTimer: Timer?
 
@@ -76,7 +96,15 @@ final class ConvertWheelView: NSView {
         registerForDraggedTypes([.fileURL])
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { spinTimer?.invalidate() }
+    deinit { spinTimer?.invalidate(); expandTimer?.invalidate() }
+
+    private func collapse() { expandTimer?.invalidate(); expandTimer = nil; expanded = nil; childWedges = []; needsDisplay = true }
+
+    /// 펼친 동안은 자식 칸을 먼저 본다. 자식 칸 번호는 `items.count + i`
+    private func hit(_ p: CGPoint) -> Int? {
+        if expanded != nil, let c = WheelMath.slot(p, childWedges) { return items.count + c }
+        return WheelMath.slot(p, wedges)
+    }
 
     private func spin() {
         spinTimer?.invalidate(); spinTimer = nil
@@ -91,13 +119,30 @@ final class ConvertWheelView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard working == nil else { return [] }
-        hovered = WheelMath.slot(point(sender), wedges)
+        let h = hit(point(sender))
+        if let e = expanded, h != e, (h ?? -1) < items.count { collapse() }   // 부모·자식 밖으로 가면 접는다
+        if h != hovered {
+            expandTimer?.invalidate(); expandTimer = nil
+            if let h, h < items.count, !items[h].children.isEmpty, expanded != h {
+                expandTimer = Ticker.once("변환 칸 펼치기", 0.5) { [weak self] _ in
+                    guard let self, self.hovered == h else { return }
+                    self.expanded = h
+                    self.childWedges = WheelMath.children(of: self.wedges[h], count: self.items[h].children.count, start: self.arc.start, span: self.arc.span)
+                    self.needsDisplay = true
+                }
+            }
+        }
+        hovered = h
         return .copy
     }
     override func draggingExited(_ sender: NSDraggingInfo?) { hovered = nil }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard working == nil else { return false }
-        if let i = WheelMath.slot(point(sender), wedges) { onPick(i) } else { onCenterDrop() }
+        if let i = hit(point(sender)) {
+            if i >= items.count, let e = expanded { let child = items[e].children[i - items.count]; collapse(); hovered = nil; child.action() }
+            else if !items[i].children.isEmpty { collapse(); onParentDrop() }
+            else { onPick(i) }
+        } else { onCenterDrop() }
         return true
     }
 
@@ -120,8 +165,10 @@ final class ConvertWheelView: NSView {
         let shadow = NSShadow(); shadow.shadowBlurRadius = 14; shadow.shadowOffset = NSSize(width: 0, height: -6)
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
         NSGraphicsContext.saveGraphicsState(); shadow.set()
-        for (i, w) in wedges.enumerated() {
-            let on = i == hovered
+        let allWedges = wedges + childWedges
+        let allItems = items + (expanded.map { items[$0].children } ?? [])
+        for (i, w) in allWedges.enumerated() {
+            let on = i == hovered || i == expanded
             let path = wedgePath(w, push: on ? 6 : 0)
             let rim = path.copy() as! NSBezierPath
             rim.lineWidth = path.lineWidth + 2
@@ -131,15 +178,15 @@ final class ConvertWheelView: NSView {
         }
         NSGraphicsContext.restoreGraphicsState()
         // 칸 이름·설명
-        for (i, w) in wedges.enumerated() where i < items.count {
-            let on = i == hovered
+        for (i, w) in allWedges.enumerated() where i < allItems.count {
+            let on = i == hovered || i == expanded
             let mid = (w.a0 + w.a1) / 2 * .pi / 180, r = (w.r0 + w.r1) / 2 + (on ? 6 : 0)
             let tc = on ? NSColor.white : NSColor(red: 0.12, green: 0.16, blue: 0.22, alpha: 1)
             let small = (w.a0 - w.a1) < 40 && w.r1 - w.r0 < 70
-            let t = NSAttributedString(string: items[i].title, attributes: [.font: NSFont.systemFont(ofSize: small ? 11 : 12, weight: .bold), .foregroundColor: tc])
+            let t = NSAttributedString(string: allItems[i].title, attributes: [.font: NSFont.systemFont(ofSize: small ? 11 : 12, weight: .bold), .foregroundColor: tc])
             let p = CGPoint(x: center.x + r * cos(mid), y: center.y + r * sin(mid))
             let ts = t.size()
-            if let note = items[i].note {
+            if let note = allItems[i].note {
                 let n = NSAttributedString(string: note, attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .semibold), .foregroundColor: tc.withAlphaComponent(0.7)])
                 t.draw(at: CGPoint(x: p.x - ts.width / 2, y: p.y))
                 n.draw(at: CGPoint(x: p.x - n.size().width / 2, y: p.y - n.size().height))
@@ -167,8 +214,8 @@ final class ConvertWheelView: NSView {
             arc.appendArc(withCenter: center, radius: r - 5, startAngle: angle, endAngle: angle + 250)
             NSColor.systemGreen.setStroke(); arc.lineWidth = 5; arc.lineCapStyle = .round; arc.stroke()
             lines([working, "바꾸는 중"])
-        } else if let i = hovered, i < items.count {
-            lines([items[i].title] + items[i].detail.split(separator: "\n").map(String.init))
+        } else if let i = hovered, i < allItems.count {
+            lines([allItems[i].title] + allItems[i].detail.split(separator: "\n").map(String.init))
         } else {
             if let thumbnail {
                 let s: CGFloat = r * 1.1
@@ -186,19 +233,23 @@ final class ConvertWheel {
     private var view: ConvertWheelView?
     private var dragTimer: Timer?
 
-    func open(items: [WheelItem], files: [URL], center c: CGPoint, in v: CGRect, onCenterDrop: @escaping () -> Void) {
+    func open(items: [WheelItem], files: [URL], center c: CGPoint, in v: CGRect, onCenterDrop: @escaping () -> Void, onParentDrop: @escaping () -> Void = {}) {
         close()
         let formats = items.filter(\.isFormat), actions = items.filter { !$0.isFormat }
         let ordered = formats + actions
-        let reach = WheelMath.outer.r1 + 12
+        let hasChildren = items.contains { !$0.children.isEmpty }   // F33: 하위 칸 고리까지 화면 안에 들어가는지로 반원 판단
+        let reach = WheelMath.outer.r1 + 12 + (hasChildren ? WheelMath.childGap + WheelMath.childDepth : 0)
         let arc = WheelMath.arc(center: c, in: v, reach: reach)
         let wedges = WheelMath.layout(formats: formats.count, actions: actions.count, start: arc.start, span: arc.span)
-        let side = (WheelMath.outerRadius(wedges) + 20) * 2
+        let grow = ordered.contains { !$0.children.isEmpty } ? WheelMath.childGap + WheelMath.childDepth : 0
+        let side = (WheelMath.outerRadius(wedges) + grow + 20) * 2
         let p = FloatingPanel(size: CGSize(width: side, height: side))
         p.setFrame(CGRect(x: c.x - side / 2, y: c.y - side / 2, width: side, height: side), display: false)
         let wv = ConvertWheelView(frame: CGRect(origin: .zero, size: p.frame.size))
         wv.center = CGPoint(x: side / 2, y: side / 2)
         wv.wedges = wedges
+        wv.arc = arc
+        wv.onParentDrop = { [weak self] in self?.close(); onParentDrop() }
         wv.items = ordered
         wv.caption = files.count > 1 ? "\(files.count)개" : Self.sizeText(files.first)
         wv.onCenterDrop = { [weak self] in self?.close(); onCenterDrop() }

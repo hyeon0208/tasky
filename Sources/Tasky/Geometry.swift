@@ -729,6 +729,11 @@ enum SelfTest {
             var ev = it("일정", d(11, 3, 11)); ev.isEvent = true
             check(TaskLogic.pending(items + [ev], now: now, calendar: cal).map(\.id) == ["어제", "날만", "지남", "곧", "오늘", "없음"],
                   "남은 할 일: 오늘·날짜 없음, 일정·내일 제외")
+            // F32 오늘 끝낸 할 일
+            func doneIt(_ id: String, _ at: Date) -> TaskItem { var t = it(id, nil, time: false); t.done = true; t.doneAt = at; return t }
+            let startToday = cal.startOfDay(for: now)
+            let dones = [doneIt("어제밤", startToday.addingTimeInterval(-60)), doneIt("새벽", startToday.addingTimeInterval(60)), doneIt("방금", now.addingTimeInterval(-10))]
+            check(TaskLogic.doneToday(dones, now: now, calendar: cal).map(\.id) == ["방금", "새벽"], "끝낸 할 일: 오늘 것만, 최근 것 먼저")
             check(TaskLogic.due(items, now: now, alerted: []).map(\.id) == ["곧", "지남"], "알릴 항목: 2분 전~1분 뒤·시간 있는 것만")
             let key = TaskLogic.alertKey(items[4], at: items[4].date)!
             check(TaskLogic.due(items, now: now, alerted: [key]).map(\.id) == ["지남"], "알릴 항목: 이미 알린 것 제외")
@@ -791,6 +796,7 @@ enum SelfTest {
             let h = Geometry.halfRing(count: 6, center: c, radius: 100, base: 90)
             check(h.count == 6 && h.allSatisfy { $0.y >= c.y - 20 }, "원형 메뉴: 반원 6칸")
             check(ClockMode.allCases.map(\.title) == ["항상", "갖다대면", "안 봄"], "받침대 보기 3가지")
+            check(["today", "quick", "drawer", "capture", "awake", "settings"].allSatisfy { GlassButton.resources?.image(forResource: "ring-\($0)")?.size == CGSize(width: 24, height: 24) }, "원형 메뉴: 둥근 선 아이콘 6개(24pt SVG)")
         }
         // F27 변환 칸
         do {
@@ -802,6 +808,40 @@ enum SelfTest {
             check(!ops(["a.mov"]).contains(.toMOV) && ops(["a.mov"]).contains(.posterFrame) && !ops(["a.m4a"]).contains(.toM4A) && ops(["a.m4a"]).contains(.toAIFF), "변환: 영상·오디오 같은 형식 빼기")
             check(!ops(["a.docx"]).contains(.docToDOCX) && ops(["a.docx"]).contains(.docToODT), "변환: 문서 ODT")
             check(ConvertOp.pdfToDOCX.note == "글자만" && ConvertOp.sheetToPDF.note == "단순 표", "변환: 품질 제한 칸 설명")
+            // F33 목표 용량
+            check(ConvertOp.shrinks.allSatisfy { ops(["a.png"]).contains($0) && ops(["a.pdf"]).contains($0) } && !ops(["a.mov"]).contains(.shrink1M), "변환: 이미지·PDF에 목표 용량 5개")
+            check(ConvertOp.shrinks.map(\.targetName) == ["500KB", "1MB", "2MB", "5MB", "10MB"] && ConvertOp.shrink1M.targetBytes == 1_000_000, "변환: 목표 용량 10진")
+            do {
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-shrink-\(UUID().uuidString)")
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: dir) }
+                func noise(_ w: Int, _ h: Int) -> CGImage {
+                    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+                    let p = ctx.data!.bindMemory(to: UInt32.self, capacity: w * h)
+                    for i in 0..<(w * h) { p[i] = UInt32.random(in: 0...UInt32.max) & 0x3f3f3f3f | UInt32((i / w) % 256) * 0x010101 }
+                    return ctx.makeImage()!
+                }
+                func size(_ u: URL) -> Int { (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
+                let big = dir.appendingPathComponent("big.png"), small = dir.appendingPathComponent("small.png"), pdf = dir.appendingPathComponent("doc.pdf")
+                try? FileManager.default.moveItem(at: try! Converter.writeImage(noise(3000, 2000), .png, quality: nil), to: big)
+                try? FileManager.default.moveItem(at: try! Converter.writeImage(noise(200, 200), .png, quality: nil), to: small)
+                var notes: [String] = []
+                let out = (try? Converter.convert(.shrink500K, [big]) { notes.append($0) }) ?? []
+                check(out.count == 1 && size(out[0]) <= 500_000 && size(out[0]) > 0, "용량 줄이기: 이미지 500KB 이하 \(out.map(size)) \(notes)")
+                notes = []
+                let none = (try? Converter.convert(.shrink500K, [small]) { notes.append($0) }) ?? [big]
+                check(none.isEmpty && notes.first?.contains("이미") == true, "용량 줄이기: 이미 작으면 안 만듦 \(notes)")
+                var a4 = CGRect(x: 0, y: 0, width: 595, height: 842)   // 사진 3쪽짜리 A4 PDF
+                if let ctx = CGContext(pdf as CFURL, mediaBox: &a4, nil) {
+                    for _ in 0..<3 { ctx.beginPDFPage(nil); ctx.draw(noise(2400, 3200), in: a4); ctx.endPDFPage() }
+                    ctx.closePDF()
+                }
+                func pageCount(_ u: URL) -> Int { CGPDFDocument(u as CFURL)?.numberOfPages ?? 0 }
+                notes = []
+                let pout = (try? Converter.convert(.shrink500K, [pdf]) { notes.append($0) }) ?? []
+                check(size(pdf) > 500_000 && pout.count == 1 && size(pout[0]) <= 500_000 && pageCount(pout[0]) == 3,
+                      "용량 줄이기: PDF 500KB 이하·쪽 수 같음 \(size(pdf)) → \(pout.map(size)) \(notes)")
+            }
             check(XLSX.parseCSV("\u{FEFF}a,\"b,c\"\r\n\"x\"\"y\",2\n") == [["a", "b,c"], ["x\"y", "2"]], "CSV 읽기: 따옴표·쉼표·BOM")
             let xml = XLSX.sheetXML([["이름", "3", "007"]])
             check(xml.contains("<c r=\"B1\"><v>3</v></c>") && xml.contains("<t xml:space=\"preserve\">007</t>") && xml.contains("이름"), "엑셀 쓰기: 숫자·앞 0 글자")
@@ -812,6 +852,12 @@ enum SelfTest {
             check(one.count == 6 && Set(one.map(\.r1)) == [WheelMath.single.r1], "변환 원: 7개 이하 고리 하나")
             let two = WheelMath.layout(formats: 5, actions: 7, start: 90, span: 360)
             check(two.prefix(5).allSatisfy { $0.r1 == WheelMath.inner.r1 } && two.suffix(7).allSatisfy { $0.r1 == WheelMath.outer.r1 }, "변환 원: 넘으면 두 고리(안 형식·밖 동작)")
+            // F33 하위 칸 펼침
+            let parent = WheelMath.Wedge(r0: 60, r1: 170, a0: 90, a1: 30)
+            let kids = WheelMath.children(of: parent, count: 5, start: 90, span: 360)
+            check(kids.count == 5 && kids.allSatisfy { $0.r0 > parent.r1 } && abs((kids[0].a0 + kids[4].a1) / 2 - 60) < 0.01, "변환 원: 하위 칸 5개 부모 바깥·가운데 맞춤")
+            let edge = WheelMath.children(of: WheelMath.Wedge(r0: 60, r1: 170, a0: 90, a1: 60), count: 5, start: 90, span: 180)
+            check(edge.first!.a0 <= 90 && edge.last!.a1 >= -90, "변환 원: 반원에서 하위 칸 범위 안")
             check(WheelMath.slot(CGPoint(x: 5, y: 100), one) == 0 && WheelMath.slot(CGPoint(x: -5, y: 100), one) == 5, "변환 원: 위 칸 맞추기(시계 방향)")
             check(WheelMath.slot(CGPoint(x: 10, y: 10), one) == nil && WheelMath.slot(CGPoint(x: 0, y: 300), one) == nil, "변환 원: 가운데·바깥은 칸 아님")
             check(WheelMath.slot(CGPoint(x: 5, y: 80), two) == 0 && WheelMath.slot(CGPoint(x: 5, y: 150), two) == 5, "변환 원: 안·밖 고리 구분")

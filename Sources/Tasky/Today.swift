@@ -376,6 +376,17 @@ final class TodayCard: NSObject, NSTextFieldDelegate {
             }
             if pending.count > 4 { todos.append(label("외 \(pending.count - 4)개", size: 11, color: .secondaryLabelColor)) }
             if todos.isEmpty { todos = [label(TaskStore.remindersOn ? "남은 할 일이 없어요" : "설정에서 미리 알림을 켜면 보여요", size: 12, color: .secondaryLabelColor)] }
+            // F32: 오늘 끝낸 할 일은 맨 아래에 흐린 취소선(최대 3줄). 체크를 풀면 완료를 푼다
+            let done = TaskLogic.doneToday(store.doneItems, now: now)
+            todos += done.prefix(3).map { item in
+                let b = ClosureButton("") { TaskStore.shared.uncomplete(item) }
+                b.setButtonType(.switch)
+                b.state = .on
+                b.attributedTitle = NSAttributedString(string: item.title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor,
+                                                                                         .strikethroughStyle: NSUnderlineStyle.single.rawValue])
+                return b
+            }
+            if done.count > 3 { todos.append(label("끝낸 것 외 \(done.count - 3)개", size: 11, color: .secondaryLabelColor)) }
             top.append(block(pending.isEmpty ? "할 일" : "할 일 \(pending.count)", NSColor(red: 0.54, green: 0.71, blue: 1, alpha: 1), todos))
             // 일정(설정한 기간까지)
             let events = TaskLogic.upcomingEvents(store.items, now: now, days: TaskStore.eventDays)
