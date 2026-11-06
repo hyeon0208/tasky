@@ -9,6 +9,14 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Tasky" "$app/Contents/MacOS/Tasky"
 cp -R "$bin/Tasky_Tasky.bundle" "$app/Contents/Resources/"
+# 앱 아이콘: Assets/AppIcon.png(1024) → AppIcon.icns
+iconset=$(mktemp -d)/AppIcon.iconset
+mkdir -p "$iconset"
+for s in 16 32 128 256 512; do
+  sips -z $s $s Assets/AppIcon.png --out "$iconset/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s*2)) $((s*2)) Assets/AppIcon.png --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 mkdir -p "$app/Contents/Frameworks"
 ditto "$bin/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"   # F29 자동 업데이트
 version=$(cat VERSION)
@@ -31,6 +39,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSHighResolutionCapable</key><true/>
   $sparkle
   <key>NSRemindersFullAccessUsageDescription</key><string>Tasky에서 할 일을 적고 끝내려면 미리 알림 접근이 필요해요.</string>
