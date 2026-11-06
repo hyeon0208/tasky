@@ -31,3 +31,4 @@ macOS 14+ 데스크톱 펫. Swift Package(AppKit, SwiftUI 미사용), Xcode 없�
 - 입력 중에 입력칸이 든 창 내용(contentView)을 다시 만들지 않는다. 포커스·한글 조합이 끊겨 타이핑이 안 된다(F26 빠른 실행).
 - ad-hoc 서명(`--sign -`)은 지정 요구가 cdhash라 앱을 다시 만들 때마다 손쉬운 사용·미리 알림·캘린더 권한이 풀린다(설정엔 켜져 보임). make-app.sh에서 지정 요구를 식별자로 고정한다. 권한 요청 API(TCC)는 실행 파일을 직접 띄우면 앱이 죽으므로 `open`으로 확인한다.
 - 한영 전환 Caps→F18 바꿈은 키보드 장치마다(`--matching` PrimaryUsage 6) 걸고 재연결·깨어남 때 다시 건다. 전체에 걸면 블루투스 키보드에서 빠져 macOS 기본 Caps Lock이 대신 동작해 전환이 씹혔다(F28).
+- 다른 앱의 입력 소스를 `TISSelectInputSource`로 바꾸면 메뉴 막대는 '한'인데 앞 앱(터미널·브라우저)은 영문으로 남는 일이 있다. 시스템 '이전 입력 소스' 단축키가 F18이면 F18을 그대로 보내 macOS가 바꾸게 한다. 앱으로 띄운 Tasky의 NSLog는 로그에 안 남으니 진단은 `diag`(stderr)와 `open --stderr <파일> dist/Tasky.app --args --debug`로 본다(F28).
