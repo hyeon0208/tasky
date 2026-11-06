@@ -63,6 +63,8 @@ final class Awake {
     static func removePermission() {
         lidAwake = false
         shared.syncLid()
+        // 되돌리지 못했으면 지우지 않는다(지우면 sudo가 막혀 1이 영영 남음)
+        guard !applied else { return }
         _ = LidSleep.uninstall()
         shared.onChange?()
     }
@@ -95,13 +97,19 @@ final class Awake {
         let power = Self.power()
         let block = !quitting && Self.lidShouldBlock(on: isOn, checked: Self.lidAwake, onAC: power.onAC, percent: power.percent, threshold: Self.lidBattery)
         if block {
-            if !Self.applied && LidSleep.isDisabled() == false && LidSleep.set(true) { Self.applied = true }
+            if !Self.applied && LidSleep.isDisabled() == false {
+                // 먼저 기록해 둔다: 1로 바꾼 직후 죽어도 다음 실행에서 되돌리게
+                Self.applied = true
+                if !LidSleep.set(true) { Self.applied = false; Self.failed("뚜껑 막기를 켜지 못했어요") }
+            }
             lowWarned = false
         } else {
             if Self.applied && LidSleep.set(false) {
                 Self.applied = false
                 // 이미 닫힌 채로 0이 되면 macOS가 다시 판단하지 않아 깨어 있다. 닫힘 잠자기 조건이면 바로 재운다
                 if !quitting { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { LidSleep.sleepIfClosed() } }
+            } else if Self.applied && !quitting {
+                Self.failed("뚜껑 막기를 풀지 못했어요. 뚜껑을 닫아도 잠들지 않을 수 있어요")
             }
             if !quitting && isOn && Self.lidAwake && !power.onAC && !lowWarned {
                 lowWarned = true
@@ -110,6 +118,8 @@ final class Awake {
         }
         watchPower(isOn && Self.lidAwake && !quitting)
     }
+
+    private static func failed(_ message: String) { DoneToast.show(text: message, symbol: "exclamationmark.triangle") }
 
     /// 시작할 때: 지난번에 되돌리지 못했으면(강제 종료 등) 0으로
     func restoreOnLaunch() {
@@ -124,10 +134,10 @@ final class Awake {
                 let me = Unmanaged<Awake>.fromOpaque(ctx).takeUnretainedValue()
                 DispatchQueue.main.async { me.syncLid() }
             }, ctx)?.takeRetainedValue() else { return }
-            CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+            CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
             powerSource = src
         } else if !on, let src = powerSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
             powerSource = nil
         }
     }
@@ -204,10 +214,10 @@ enum LidSleep {
 
     /// 관리자 암호를 한 번 받아 설치. 취소·실패면 false
     static func install() -> Bool {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("tasky-sudoers-\(UUID().uuidString)")
-        guard (try? sudoersLine(user: NSUserName()).write(to: tmp, atomically: true, encoding: .utf8)) != nil else { return false }
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        let sh = "/usr/sbin/visudo -cf '\(tmp.path)' && /usr/bin/install -m 0440 -o root -g wheel '\(tmp.path)' \(sudoersPath)"
+        // 임시 파일은 관리자 셸 안에서 root 소유로 만든다(사용자 파일을 검사 뒤 바꿔치기 못 하게)
+        let line = sudoersLine(user: NSUserName()).trimmingCharacters(in: .newlines)
+        guard !line.contains("'") else { return false }
+        let sh = "t=$(/usr/bin/mktemp /tmp/tasky-sudoers.XXXXXX) && echo '\(line)' > $t && /usr/sbin/visudo -cf $t && /usr/bin/install -m 0440 -o root -g wheel $t \(sudoersPath); r=$?; /bin/rm -f $t; exit $r"
         return admin(sh) && installed
     }
 

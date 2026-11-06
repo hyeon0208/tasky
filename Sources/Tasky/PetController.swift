@@ -1337,7 +1337,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
             [NSView(), note("잠 안 자기가 켜진 동안 뚜껑을 닫아도 Mac이 잠들지 않아요. 닫은 채 가방에 넣으면 뜨거워질 수 있어요.")],
             [NSTextField(labelWithString: "배터리 보호"),
              popup(Awake.batteryChoices.map { "\($0)% 아래면 풀기" }, selected: Awake.batteryChoices.firstIndex(of: Awake.lidBattery) ?? 2) {
-                 Awake.lidBattery = Awake.batteryChoices[$0]; Awake.shared.syncLid() }],
+                 Awake.lidBattery = Awake.batteryChoices[$0]; Awake.shared.syncLid(); Awake.shared.onChange?() }],
             [NSView(), status],
             [NSView(), remove],
         ])])
