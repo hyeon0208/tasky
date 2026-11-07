@@ -88,6 +88,7 @@ summary{cursor:pointer;color:var(--accent);font-size:14px}
 .news{display:flex;gap:var(--s3);align-items:baseline;flex-wrap:wrap;justify-content:center;margin-top:var(--s4);font-size:14px}
 .news b{font-size:17px}
 .news > :empty{display:none} /* 불러오는 중·오류 때 빈 칸이 간격을 차지하지 않게 */
+.news-list{list-style:none;margin:var(--s2) 0 0;padding:0;text-align:center;font-size:14px;color:var(--ink-2);line-height:1.8}
 
 footer{margin-top:var(--s5);background:var(--soft);padding:var(--s4) 0;font-size:14px;color:var(--ink-2)}
 footer .wrap{display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}
@@ -171,8 +172,9 @@ footer .wrap{display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:
       <span>새로운 소식</span>
       <b data-news-tag></b>
       <span data-news-text></span>
-      <a href="https://github.com/hyeon0208/tasky/releases" data-news-link>모든 변경 기록 ›</a>
+      <a href="https://github.com/hyeon0208/tasky/releases" data-news-link></a>
     </div>
+    <ul class="news-list" data-news-list></ul>
   </div>
 </section>
 </main>
@@ -239,22 +241,22 @@ else if ('IntersectionObserver' in window) {
   vids.forEach(v => io.observe(v));
 }
 
-// 릴리스 본문의 첫 줄(제목·Full Changelog 제외, 마크다운 기호 제거). 없으면 ''
-function firstLine(body) {
+// 릴리스 본문의 바뀐 점 줄들(제목·Full Changelog 제외, 마크다운 기호 제거). 없으면 []
+function changeLines(body) {
   return (body || '').split('\n')
     .filter(l => l.trim() && !/^\s*#/.test(l) && !/Full Changelog/i.test(l))
     .map(l => l.replace(/^\s*[-*]\s+/, '').replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim())
-    .find(Boolean) || '';
+    .filter(Boolean);
 }
 // 최신 공개 릴리스(draft·prerelease 제외). 없으면 null
 function pickRelease(list) {
   const rel = (list || []).find(x => !x.draft && !x.prerelease); if (!rel) return null;
   const pick = ext => (rel.assets || []).find(a => a.name.toLowerCase().endsWith('.' + ext));
-  return { tag: rel.tag_name, first: firstLine(rel.body), assets: { dmg: pick('dmg')?.browser_download_url, zip: pick('zip')?.browser_download_url } };
+  return { tag: rel.tag_name, lines: changeLines(rel.body), assets: { dmg: pick('dmg')?.browser_download_url, zip: pick('zip')?.browser_download_url } };
 }
 
 // 버전·새로운 소식: GitHub Releases. 다운로드 주소는 이름 고정 파일(ADR 0001)이라 API가 실패해도 그대로 동작한다.
-const newsTag = document.querySelector('[data-news-tag]'), newsText = document.querySelector('[data-news-text]'), newsLink = document.querySelector('[data-news-link]');
+const newsTag = document.querySelector('[data-news-tag]'), newsText = document.querySelector('[data-news-text]'), newsList = document.querySelector('[data-news-list]'), newsLink = document.querySelector('[data-news-link]');
 // releases/latest는 최신 공개 릴리스 하나를 주고, 공개 릴리스가 없으면 404
 const LATEST_PAGE = 'https://github.com/hyeon0208/tasky/releases/latest';
 fetch('https://api.github.com/repos/hyeon0208/tasky/releases/latest')
@@ -268,7 +270,7 @@ fetch('https://api.github.com/repos/hyeon0208/tasky/releases/latest')
     document.querySelectorAll('[data-dl]').forEach(a => { a.href = rel.assets[a.dataset.dl] || LATEST_PAGE; });
     document.querySelectorAll('[data-version]').forEach(s => s.textContent = rel.tag);
     newsTag.textContent = rel.tag;
-    newsText.textContent = rel.first || '바뀐 점은 GitHub에서 볼 수 있어요.';
+    newsList.replaceChildren(...rel.lines.map(t => Object.assign(document.createElement('li'), { textContent: t })));
   }).catch(() => { newsLink.textContent = 'GitHub에서 보기 ›'; });
 
 // 설치 명령 복사. 실패하면 명령을 선택해 두고 ⌘C를 안내한다.

@@ -1,19 +1,19 @@
-// node tests/check.mjs — index.html의 pickRelease·firstLine 검사, 참조 파일 존재 확인
+// node tests/check.mjs — index.html의 pickRelease·changeLines 검사, 참조 파일 존재 확인
 import { readFileSync, existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const grab = name => html.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n}`))[0];
-const { pickRelease } = new Function(`${grab('firstLine')}\n${grab('pickRelease')}\nreturn { pickRelease };`)();
+const { pickRelease } = new Function(`${grab('changeLines')}\n${grab('pickRelease')}\nreturn { pickRelease };`)();
 
 const asset = n => ({ name: n, browser_download_url: `https://x/${n}` });
 const rel = (o) => ({ draft: false, prerelease: false, tag_name: 'v1.4.0', body: '', assets: [], ...o });
 
-// 1. 정상: 첫 줄 + 확장자별 주소
+// 1. 정상: 바뀐 점 줄들 + 확장자별 주소
 let r = pickRelease([rel({ body: '## 바뀐 점\n- **서랍** 새 디자인\n- 기타', assets: [asset('Tasky.dmg'), asset('Tasky.zip')] })]);
-assert.deepEqual(r, { tag: 'v1.4.0', first: '서랍 새 디자인', assets: { dmg: 'https://x/Tasky.dmg', zip: 'https://x/Tasky.zip' } });
-// 2. Full Changelog만 있는 본문 → 빈 첫 줄(화면은 대체 문구)
-assert.equal(pickRelease([rel({ body: '**Full Changelog**: https://github.com/a/b/compare/v1...v2' })]).first, '');
+assert.deepEqual(r, { tag: 'v1.4.0', lines: ['서랍 새 디자인', '기타'], assets: { dmg: 'https://x/Tasky.dmg', zip: 'https://x/Tasky.zip' } });
+// 2. Full Changelog만 있는 본문 → 빈 목록(화면은 버전만)
+assert.deepEqual(pickRelease([rel({ body: '**Full Changelog**: https://github.com/a/b/compare/v1...v2' })]).lines, []);
 // 3. draft·prerelease만 → null(빈 상태)
 assert.equal(pickRelease([rel({ draft: true }), rel({ prerelease: true })]), null);
 assert.equal(pickRelease([]), null);
