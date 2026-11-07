@@ -25,4 +25,8 @@ const refs = [...html.matchAll(/(?:src|poster)="((?:media|img)\/[^"]+)"/g)].map(
 for (const f of html.match(/'\d\d-[a-z]+'/g).map(s => s.slice(1, -1))) refs.push(`media/${f}.mp4`, `media/${f}.jpg`);
 const missing = refs.filter(p => !existsSync(new URL(`../${p}`, import.meta.url)));
 assert.deepEqual(missing, []);
+// CSS로 img 가로를 정하면 높이도 정해야 함(태그 height 속성이 남아 늘어남)
+const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+const badImg = [...css.matchAll(/([^{}]*\bimg)\{([^}]*)\}/g)].filter(m => /(^|;)\s*width:/.test(m[2]) && !/(^|;)\s*height:/.test(m[2])).map(m => m[1].trim());
+assert.deepEqual(badImg, []);
 console.log(`ok: 사례 4개, 참조 파일 ${new Set(refs).size}개`);
