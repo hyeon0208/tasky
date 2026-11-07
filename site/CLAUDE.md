@@ -1,0 +1,2 @@
+- 확인: `node tests/check.mjs` (릴리스 고르기 함수·참조 파일). 화면은 `python3 -m http.server`로 띄워 375·820·1440px 확인.
+- 다운로드 링크는 이름 고정 파일 `releases/latest/download/Tasky.dmg|zip`이다(docs/adr/0001). 파일 이름을 바꾸지 않는다.

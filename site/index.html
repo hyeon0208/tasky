@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tasky</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>
+<!-- Web Analytics를 켜면 대시보드가 주는 /<unique-path>/script.js로 바꾼다 -->
+<script defer src="/_vercel/insights/script.js"></script>
+<style>
+/* 시안 C2 — C의 흑백 토큰 그대로. 바뀐 점: 기능 9개를 한 무대(탭 + 영상 하나)로 모으고,
+   카피는 한 기능에 제목 한 줄 + 문장 한 줄. 단축키·세부 목록은 뺐다. 설치는 다운로드 판 안으로. */
+:root{
+  --ground:#FFFFFF; --soft:#F4F4F2; --ink:#1A1A1A; --ink-2:#555555; --line:#E4E4E0;
+  --accent:#0060DF; --screen:#000000;
+  --s1:8px; --s2:16px; --s3:24px; --s4:48px; --s5:88px; --s6:160px;
+  --font:"Noto Sans KR",-apple-system,system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--ground);color:var(--ink);font:17px/1.65 var(--font);-webkit-font-smoothing:antialiased;word-break:keep-all}
+img,video{max-width:100%;display:block}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+h1,h2,h3{text-wrap:balance;line-height:1.12;letter-spacing:-.035em}
+h1{font-size:clamp(46px,9vw,104px);font-weight:900}
+h2{font-size:clamp(34px,5.4vw,60px);font-weight:900;margin-bottom:var(--s3)}
+p{color:var(--ink-2)}
+.center{text-align:center}
+
+.top{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.92);border-bottom:1px solid var(--line)} /* taste-skill-ignore: 고정 상단 바 */
+.top .wrap{display:flex;align-items:center;justify-content:space-between;height:52px}
+.logo{display:flex;align-items:center;gap:8px;color:var(--ink);font-weight:700;font-size:17px}
+.logo:hover{text-decoration:none}
+.logo img{width:24px;height:24px;border-radius:6px}
+.top nav{display:flex;align-items:center;gap:22px;font-size:14px}
+.top nav a{color:var(--ink-2)}
+.top nav .mini{background:var(--ink);color:#fff;padding:5px 14px;border-radius:999px}
+
+.btn{display:inline-block;background:var(--ink);color:#fff;font-weight:500;font-size:17px;padding:14px 30px;border-radius:999px}
+.btn:hover{text-decoration:none;background:#000}
+.btn:focus-visible,a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.links{display:flex;gap:28px;justify-content:center;align-items:center;flex-wrap:wrap}
+.meta{font-size:14px;color:var(--ink-2);margin-top:var(--s2)}
+
+.screen{background:var(--screen);border-radius:24px;overflow:hidden}
+.screen video{width:100%;height:100%;object-fit:contain}
+
+/* 히어로 */
+.hero{padding-top:var(--s5)}
+.hero p{font-size:20px;margin:var(--s3) auto var(--s4)}
+.hero .screen{margin-top:var(--s5);aspect-ratio:16/9}
+
+section{padding:var(--s6) 0 0}
+
+/* 기능 무대: 탭을 누르면 영상과 두 줄이 바뀐다 */
+.tabs{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:var(--s4)}
+.tabs button{border:0;background:var(--soft);color:var(--ink);font:500 14px var(--font);padding:9px 18px;border-radius:999px;cursor:pointer}
+.tabs button:hover{background:var(--line)}
+.tabs button[aria-selected="true"]{background:var(--ink);color:#fff}
+.stage{display:grid;grid-template-columns:1fr 1.5fr;gap:var(--s4);align-items:center;margin-top:var(--s4)}
+.stage > *{min-width:0}
+.stage h3{font-size:clamp(30px,4vw,44px);font-weight:900;margin-bottom:var(--s2)}
+.stage p{font-size:20px}
+.stage .screen{aspect-ratio:4/3}
+.stage .say{transition:opacity .25s}
+.stage .say.out{opacity:0}
+.note{display:block;margin-top:var(--s2);font-size:14px;font-weight:700;color:var(--ink)}
+.note:empty{display:none}
+
+/* 다운로드 + 설치 */
+.dl{background:var(--soft);border-radius:28px;padding:var(--s5) var(--s3)}
+.dl img{width:112px;margin:0 auto var(--s3);border-radius:24px}
+.install{max-width:620px;margin:var(--s4) auto 0;text-align:left}
+.install h3{font-size:20px;font-weight:700;margin-bottom:var(--s1)}
+.cmd{display:flex;background:var(--ink);border-radius:14px;margin:var(--s2) 0;overflow:hidden}
+.cmd code{flex:1;min-width:0;color:#fff;font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:14px 16px;overflow-x:auto;white-space:nowrap}
+.cmd button{flex:none;border:0;background:#333;color:#fff;font:500 14px var(--font);padding:0 18px;cursor:pointer}
+.cmd button:hover{background:#444}
+details{margin-top:var(--s3)}
+summary{cursor:pointer;color:var(--accent);font-size:14px}
+.steps{padding-left:22px;margin-top:var(--s2);color:var(--ink-2);display:grid;gap:6px;font-size:14px}
+
+/* 소식: 최신 하나만 */
+.news{display:flex;gap:var(--s3);align-items:baseline;flex-wrap:wrap;justify-content:center;margin-top:var(--s4);font-size:14px}
+.news b{font-size:17px}
+.news > :empty{display:none} /* 불러오는 중·오류 때 빈 칸이 간격을 차지하지 않게 */
+
+footer{margin-top:var(--s5);background:var(--soft);padding:var(--s4) 0;font-size:14px;color:var(--ink-2)}
+footer .wrap{display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}
+
+@media (max-width:820px){
+  .top nav a:not(.mini){display:none}
+  .hero{padding-top:var(--s4)}
+  .hero p{font-size:17px}
+  .hero .screen{margin-top:var(--s4)}
+  section{padding-top:var(--s5)}
+  .screen{border-radius:18px}
+  .stage{grid-template-columns:1fr;gap:var(--s3)}
+  .stage .screen{order:-1}
+}
+@media (prefers-reduced-motion:reduce){.stage .say{transition:none}}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="wrap">
+    <a class="logo" href="#hero"><img src="img/appicon.png" alt="">Tasky</a>
+    <nav><a href="#features">할 줄 아는 것</a><a href="#download">설치</a><a class="mini" href="https://github.com/hyeon0208/tasky/releases/latest/download/Tasky.dmg" data-dl="dmg">내려받기</a></nav>
+  </div>
+</div>
+
+<header id="hero">
+  <div class="wrap hero center">
+    <h1>바탕화면에<br>곰 한 마리.</h1>
+    <p>자잘한 Mac 일, 이제 곰한테 맡기세요.</p>
+    <div class="links">
+      <a class="btn" href="https://github.com/hyeon0208/tasky/releases/latest/download/Tasky.dmg" data-dl="dmg">무료로 내려받기</a>
+    </div>
+    <div class="meta">macOS 14 이상 · 무료 · 오픈 소스</div>
+    <div class="screen">
+      <video autoplay muted loop playsinline preload="auto" poster="media/00-hero.jpg" aria-label="바탕화면의 곰에 커서를 올리면 시계가 뜨고, 끌어서 던지면 미끄러지다 멈춘다"><source src="media/00-hero.mp4" type="video/mp4"></video>
+    </div>
+  </div>
+</header>
+
+<main>
+<section id="features">
+  <div class="wrap">
+    <h2 class="center">작은데, 일을 잘해요.</h2>
+    <div class="tabs" role="tablist" aria-label="Tasky 기능"></div>
+    <div class="stage">
+      <div class="say" aria-live="polite"><h3></h3><p></p><span class="note"></span></div>
+      <div class="screen"><video muted playsinline preload="metadata"></video></div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="dl center">
+      <img src="img/appicon.png" alt="Tasky 앱 아이콘" width="256" height="256">
+      <h2>곰 데려가기</h2>
+      <p>설치는 1분이면 돼요. 업데이트는 곰이 알아서 해요.</p>
+      <div class="links" style="margin-top:var(--s4)">
+        <a class="btn" href="https://github.com/hyeon0208/tasky/releases/latest/download/Tasky.dmg" data-dl="dmg">.dmg 내려받기</a>
+        <a href="https://github.com/hyeon0208/tasky/releases/latest/download/Tasky.zip" data-dl="zip">.zip으로 받기 ›</a>
+      </div>
+      <div class="meta"><span data-version>최신 버전</span> · macOS 14 이상</div>
+
+      <div class="install">
+        <h3>제일 빠른 방법: 터미널에 한 줄</h3>
+        <p>붙여 넣으면 설치부터 실행까지 한 번에 끝나요.</p>
+        <div class="cmd"><code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/hyeon0208/tasky/main/scripts/install.sh | bash</code><button type="button" data-copy="install-cmd">복사</button></div>
+        <details>
+          <summary>터미널이 낯설다면 .dmg로 설치하기</summary>
+          <ol class="steps">
+            <li>.dmg를 열고 Tasky를 응용 프로그램 폴더로 옮겨요.</li>
+            <li>처음 열 때 경고가 뜨면 ‘완료’를 눌러요.</li>
+            <li>시스템 설정 → 개인정보 보호 및 보안에서 ‘그래도 열기’를 눌러요.</li>
+            <li>다시 열면 곰이 나타나요. 이 과정은 처음 한 번뿐이에요.</li>
+          </ol>
+        </details>
+      </div>
+    </div>
+    <div class="news" data-news>
+      <span>새로운 소식</span>
+      <b data-news-tag></b>
+      <span data-news-text></span>
+      <a href="https://github.com/hyeon0208/tasky/releases" data-news-link>모든 변경 기록 ›</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer id="github">
+  <div class="wrap">
+    <span>Tasky · 오픈 소스(MIT)</span>
+    <a href="https://github.com/hyeon0208/tasky">GitHub에서 보기 ›</a>
+  </div>
+</footer>
+
+<script>
+// 기능 무대 데이터: 탭 이름 · 제목 · 한 줄 · 영상
+const FEATURES = [
+  ['원형 메뉴', '곰을 톡.', '필요한 게 동그랗게 펼쳐져요.', '04-ring', '곰을 누르면 둘레에 원형 메뉴가 펼쳐지고, 칸을 가리키면 이름이 보인다'],
+  ['일정 관리', '일정은 말하듯이.', '“내일 3시 회의”라고 적으면 캘린더에 쏙, 할 일은 미리 알림에 쏙. 원래 쓰던 Apple 앱에 그대로 들어가요.', '05-today', '오늘 카드에 일정과 할 일을 적으면 목록에 들어가고, 일정 전에 알림이 뜬다', 'Apple 캘린더 · 미리 알림과 연동'],
+  ['파일 변환', '파일은 곰한테 던지세요.', '변환 사이트에 올릴 필요 없어요. 끌어다 놓으면 원하는 형식으로, 원하는 용량으로. 원본은 그대로 두고 새 파일을 옆에 만들어요.', '06-shrink', '사진과 PDF를 곰에게 끌어 와 목표 용량 칸에 놓으면, 원본 옆에 용량을 줄인 새 파일이 생긴다', '15.4MB 사진 → 1.9MB · 38.9MB PDF → 4.7MB'],
+  ['폴더 서랍', '자주 여는 폴더는 곰 서랍에.', 'Finder를 뒤질 필요 없이 바로 꺼내요.', '07-drawer', 'Finder의 폴더를 서랍에 끌어 넣고, 칼럼으로 파일을 찾고, 크기를 바꾸고, 최근 파일을 본다'],
+  ['캡처', '찍고, 내 마음대로.', '찍은 화면이 바로 편집 창에 열려요. 자르고, 표시하고, 가리고, 강조해서 나만의 이미지로 완성해요.', '08-capture', '화면 일부를 찍고 편집 창에서 화살표와 번호를 넣는다'],
+  ['클립보드', '아까 복사한 그거, 곰이 갖고 있어요.', '지난번에 복사한 것도 다시 꺼내 써요.', '09-clipboard', '복사하자 곰이 받아 들고, 기록 창에서 항목을 찾는다'],
+  ['한영 전환', '한/영 전환, 씹힘 없이.', '누르는 순간 바로 바뀌어요. 아무리 빨리 쳐도 씹히지 않아서, Karabiner 같은 앱을 따로 깔 필요가 없어요.', '10-keyboard', '키를 누를 때마다 한글과 영어가 번갈아 바로 입력된다'],
+  ['키 반복', '꾹 누르면, 더 빠르게.', 'macOS 설정의 최고 속도보다 더 빠르게. 지울 때도, 커서를 옮길 때도 답답하지 않아요.', '12-keyrepeat', '평소 속도와 빠른 속도로 키를 꾹 눌러 반복되는 글자 수를 비교한다'],
+  ['잠 안 자기', '자리 비워도, Mac은 깨어 있게.', '긴 다운로드, 빌드, 발표, 영상 보기. 곰을 한 번 클릭해 두면 화면이 꺼지지 않아요.', '03-menubar', '메뉴 막대의 곰 아이콘을 누를 때마다 잠 안 자기가 켜지고 꺼진다'],
+  ['창 정리', '어지러운 창은 곰이 착착.', '반쪽, 4분의 1, 꽉 차게. 깔끔하게 맞춰요.', '11-window', '창이 왼쪽 반, 오른쪽 반, 4분의 1, 최대화로 맞춰진다'],
+];
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const tabs = document.querySelector('.tabs');
+const say = document.querySelector('.say');
+const stageVid = document.querySelector('.stage video');
+let cur = 0, userPicked = false, inView = false;
+
+FEATURES.forEach(([label], i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.role = 'tab'; b.textContent = label;
+  b.addEventListener('click', () => { userPicked = true; show(i); });
+  tabs.appendChild(b);
+});
+// 재생 속도. 한영 전환·키 반복은 실제 속도를 보여 줘야 하므로 1배 그대로.
+const SPEED = { '04-ring': 1.3, '05-today': 1.5, '06-shrink': 2, '07-drawer': 1.6, '08-capture': 1.75, '09-clipboard': 1.6, '03-menubar': 1.6, '11-window': 1.6 };
+function show(i) {
+  cur = i;
+  const [, title, line, file, alt, note = ''] = FEATURES[i];
+  [...tabs.children].forEach((b, j) => b.setAttribute('aria-selected', j === i));
+  say.classList.add('out');
+  setTimeout(() => { say.querySelector('h3').textContent = title; say.querySelector('p').textContent = line; say.querySelector('.note').textContent = note; say.classList.remove('out'); }, still ? 0 : 200);
+  stageVid.poster = `media/${file}.jpg`;
+  stageVid.src = `media/${file}.mp4`;
+  stageVid.defaultPlaybackRate = stageVid.playbackRate = SPEED[file] ?? 1;   // src를 바꾸면 속도가 초기화되므로 매번 지정
+  stageVid.setAttribute('aria-label', alt);
+  stageVid.loop = userPicked;          // 직접 고르면 그 기능을 반복, 아니면 끝나면 다음 기능으로
+  if (!still && inView) stageVid.play().catch(() => {});
+}
+stageVid.addEventListener('ended', () => { if (!userPicked) show((cur + 1) % FEATURES.length); });
+show(0);
+
+// 영상: 화면에 들어오면 재생, 나가면 멈춤. 움직임 줄이기 설정이면 포스터만.
+const vids = document.querySelectorAll('video');
+if (still) vids.forEach(v => { v.removeAttribute('autoplay'); v.pause(); });
+else if ('IntersectionObserver' in window) {
+  const io = new IntersectionObserver(es => es.forEach(e => {
+    if (e.target === stageVid) inView = e.isIntersecting;
+    e.isIntersecting ? e.target.play().catch(() => {}) : e.target.pause();
+  }), { threshold: .35 });
+  vids.forEach(v => io.observe(v));
+}
+
+// 릴리스 본문의 첫 줄(제목·Full Changelog 제외, 마크다운 기호 제거). 없으면 ''
+function firstLine(body) {
+  return (body || '').split('\n')
+    .filter(l => l.trim() && !/^\s*#/.test(l) && !/Full Changelog/i.test(l))
+    .map(l => l.replace(/^\s*[-*]\s+/, '').replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim())
+    .find(Boolean) || '';
+}
+// 최신 공개 릴리스(draft·prerelease 제외). 없으면 null
+function pickRelease(list) {
+  const rel = (list || []).find(x => !x.draft && !x.prerelease); if (!rel) return null;
+  const pick = ext => (rel.assets || []).find(a => a.name.toLowerCase().endsWith('.' + ext));
+  return { tag: rel.tag_name, first: firstLine(rel.body), assets: { dmg: pick('dmg')?.browser_download_url, zip: pick('zip')?.browser_download_url } };
+}
+
+// 버전·새로운 소식: GitHub Releases. 다운로드 주소는 이름 고정 파일(ADR 0001)이라 API가 실패해도 그대로 동작한다.
+const newsTag = document.querySelector('[data-news-tag]'), newsText = document.querySelector('[data-news-text]'), newsLink = document.querySelector('[data-news-link]');
+// releases/latest는 최신 공개 릴리스 하나를 주고, 공개 릴리스가 없으면 404
+const LATEST_PAGE = 'https://github.com/hyeon0208/tasky/releases/latest';
+fetch('https://api.github.com/repos/hyeon0208/tasky/releases/latest')
+  .then(r => r.status === 404 ? [] : r.ok ? r.json().then(x => [x]) : Promise.reject())
+  .then(list => {
+    const rel = pickRelease(list);
+    if (!rel) {
+      document.querySelectorAll('[data-dl]').forEach(a => { a.href = LATEST_PAGE; });
+      newsText.textContent = '아직 공개한 버전이 없어요'; newsLink.textContent = 'GitHub에서 보기 ›'; return;
+    }
+    document.querySelectorAll('[data-dl]').forEach(a => { a.href = rel.assets[a.dataset.dl] || LATEST_PAGE; });
+    document.querySelectorAll('[data-version]').forEach(s => s.textContent = rel.tag);
+    newsTag.textContent = rel.tag;
+    newsText.textContent = rel.first || '바뀐 점은 GitHub에서 볼 수 있어요.';
+  }).catch(() => { newsLink.textContent = 'GitHub에서 보기 ›'; });
+
+// 설치 명령 복사. 실패하면 명령을 선택해 두고 ⌘C를 안내한다.
+document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
+  const code = document.getElementById(b.dataset.copy);
+  const flash = t => { b.textContent = t; clearTimeout(b.timer); b.timer = setTimeout(() => b.textContent = '복사', 1500); };
+  Promise.resolve().then(() => navigator.clipboard.writeText(code.textContent))
+    .then(() => flash('복사됨'), () => { getSelection().selectAllChildren(code); flash('⌘C로 복사'); });
+}));
+
+// 다운로드 클릭 수: Vercel Web Analytics 사용자 지정 이벤트(Pro 이상에서 집계)
+document.querySelectorAll('[data-dl]').forEach(a => a.addEventListener('click', () => va('event', { name: 'download', data: { type: a.dataset.dl } })));
+</script>
+</body>
+</html>
