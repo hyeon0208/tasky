@@ -169,7 +169,15 @@ final class DrawerBrowser: NSBrowser {
     var onEscape: () -> Void = {}
     /// 처리했으면 true (⌘⌫, ⌘C, ⌘V, ⌘D, ⌘O, Return)
     var onKey: (NSEvent) -> Bool = { _ in false }
+    var onDragEnd: () -> Void = {}
     override func cancelOperation(_ sender: Any?) { onEscape() }
+    override func draggingExited(_ sender: NSDraggingInfo?) { super.draggingExited(sender); onDragEnd() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { super.draggingEnded(sender); onDragEnd() }
+    /// 칼럼 안의 줄을 다시 그린다(놓을 폴더 표시가 바뀔 때)
+    func redrawCells() {
+        func mark(_ v: NSView) { v.needsDisplay = true; v.subviews.forEach(mark) }
+        mark(self)
+    }
 
     var selectedFiles: [URL] {
         (selectionIndexPaths.compactMap { item(at: $0) as? FileNode }).filter { !$0.isFolder }.map(\.url)
@@ -201,25 +209,38 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
     private let store = DrawerStore.shared
     private let table = NSTableView()
     private let browser = DrawerBrowser()
-    private let message = NSTextField(labelWithString: "")
-    private let pinButton = NSButton()
-    private let pathControl = NSPathControl()
+    private let message = DrawerMessage(labelWithString: "")
+    private let dropIcon = NSImageView(image: DS.into(14))
+    private let pinButton = DSPinButton()
+    private let sizeSegment = DSSizeSegment()
+    private let crumbs = DSCrumbs()
+    private let sheet = NSView()
+    private let positionBar = DSPositionBar()
+    private let emptyBoard = DSEmptyBoard()
     private var root: FileNode?
     private let onClose: () -> Void
     private static let tablePasteType = NSPasteboard.PasteboardType("tasky.folder-row")
 
     init(size: CGSize, onClose: @escaping () -> Void) {
         self.onClose = onClose
+        // 시안 A 판: 흐린 유리 + 옅은 칠(밝은 0.76 / 어두운 0.72), 모서리 14, 0.5pt 테두리 + 위쪽 안쪽 1pt 빛
         let effect = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
-        effect.material = .hudWindow
+        effect.material = .popover
+        effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
         effect.layer?.cornerRadius = 14
         effect.layer?.masksToBounds = true
+        let tint = DrawerSkin(frame: effect.bounds, part: .tint)
+        tint.autoresizingMask = [.width, .height]
+        effect.addSubview(tint)
         view = effect
         super.init()
         store.refresh()
         build(size: size)
+        let edge = DrawerSkin(frame: view.bounds, part: .edge)
+        edge.autoresizingMask = [.width, .height]
+        view.addSubview(edge, positioned: .below, relativeTo: view.subviews.first { $0 is ResizeEdge })
         rebuildChips()
         if !store.folders.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) } else { showRoot(nil) }
     }
@@ -233,10 +254,19 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
     private var showingRecent = false
 
     private func rebuildChips() {
+        defer { updateEmpty() }
+        guard !store.folders.isEmpty else {   // 폴더 없음: ‘최근’ 흐리게 + 테두리 칩 ‘+ 폴더 넣기’
+            let recent = DSChip("최근", image: DS.clock(15), style: .dim) {}
+            recent.toolTip = "폴더를 넣으면 쓸 수 있어요"
+            chips.setViews([recent, DSChip("폴더 넣기", image: DS.plus(15), style: .add) { [weak self] in self?.addFolder() }], in: .leading)
+            return
+        }
         let sel = showingRecent ? -1 : table.selectedRow
-        var views: [NSView] = [chip("최근", symbol: "clock", on: sel == -1) { [weak self] in self?.showRecent() }]
+        var views: [NSView] = [DSChip("최근", image: DS.clock(15), style: sel == -1 ? .on : .normal) { [weak self] in self?.showRecent() }]
         for (i, f) in store.folders.enumerated() {
-            let b = chip(f.name, symbol: store.url(of: f) == nil ? "folder.badge.questionmark" : "folder.fill", on: sel == i) { [weak self] in
+            let missing = store.url(of: f) == nil
+            let image = missing ? NSImage(systemSymbolName: "folder.badge.questionmark", accessibilityDescription: nil)! : DS.folder(15)
+            let b = DSChip(f.name, image: image, style: sel == i ? .on : .normal) { [weak self] in
                 guard let self else { return }
                 self.showingRecent = false
                 if self.table.selectedRow == i { self.tableViewSelectionDidChange(Notification(name: .init(""))) }
@@ -248,31 +278,26 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
             b.menu = menu
             views.append(b)
         }
-        let add = chip("", symbol: "plus", on: false) { [weak self] in self?.addFolder() }
+        let add = DSChip("", image: DS.plus(15), style: .normal) { [weak self] in self?.addFolder() }
         add.toolTip = "폴더 추가(폴더를 이 줄에 끌어 놓아도 돼요)"
         views.append(add)
         chips.setViews(views, in: .leading)
     }
 
-    private func chip(_ title: String, symbol: String, on: Bool, _ action: @escaping () -> Void) -> ClosureButton {
-        let b = ClosureButton(title, action)
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title.isEmpty ? "추가" : nil)
-        b.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
-        b.isBordered = false; b.wantsLayer = true
-        b.layer?.cornerRadius = 12
-        b.layer?.backgroundColor = (on ? NSColor.controlAccentColor : NSColor.labelColor.withAlphaComponent(0.08)).cgColor
-        b.contentTintColor = on ? .white : .labelColor
-        b.attributedTitle = NSAttributedString(string: title.isEmpty ? "" : " \(title) ", attributes: [.foregroundColor: on ? NSColor.white : NSColor.labelColor, .font: NSFont.systemFont(ofSize: 12, weight: .semibold)])
-        b.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        if title.isEmpty { b.widthAnchor.constraint(equalToConstant: 28).isActive = true }
-        return b
+    /// 폴더가 하나도 없으면 가운데 점선 판을 보인다
+    private func updateEmpty() {
+        let empty = store.folders.isEmpty
+        emptyBoard.isHidden = !empty
+        if empty { browser.isHidden = true; recentScroll.isHidden = true; showingRecent = false }
+        else if !showingRecent { browser.isHidden = false }
+        updateLayout()
     }
 
     private func showRecent() {
         showingRecent = true
         browser.isHidden = true; recentScroll.isHidden = false
-        pathControl.url = nil
-        message.stringValue = "고정 폴더에서 최근 7일 동안 바뀐 파일"
+        recent = []; recentTable.reloadData()
+        message.stringValue = "최근 파일을 찾는 중…"
         rebuildChips()
         let roots = store.folders.compactMap { store.url(of: $0) }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -281,12 +306,14 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
                 guard let self, self.showingRecent else { return }
                 self.recent = items
                 self.recentTable.reloadData()
-                if items.isEmpty { self.message.stringValue = roots.isEmpty ? "먼저 ‘+’로 자주 가는 폴더를 넣어 주세요" : "최근 7일 동안 바뀐 파일이 없어요" }
+                self.message.stringValue = items.isEmpty ? (roots.isEmpty ? "먼저 ‘+’로 자주 가는 폴더를 넣어 주세요" : "최근 7일 동안 바뀐 파일이 없어요")
+                    : "고정 폴더에서 최근 7일 동안 바뀐 파일"
             }
         }
     }
 
     private func hideRecent() {
+        if showingRecent { message.stringValue = "" }
         showingRecent = false
         browser.isHidden = false; recentScroll.isHidden = true
     }
@@ -297,15 +324,21 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
     }
 
     static let sideWidth: CGFloat = 0   // F27 8번 A: 왼쪽 목록 대신 위 칩 줄(목록 표는 선택 상태로만 쓴다)
-    private static let chipBar: CGFloat = 44
+    // 시안 A(drawer-style): 칩 줄 50 · 칼럼(좌우 8 여백의 안쪽 판) · 아래 줄 32
+    private static let chipBar: CGFloat = 50
+    private static let bar: CGFloat = 32
+    private static let inset: CGFloat = 8
     static let columnWidth: CGFloat = 300
-    private static let bar: CGFloat = 56
+    /// 크기 단추: 작게·보통·크게 = 칼럼 2·3·4개. 창 폭은 칼럼 수 × 300(칼럼은 안쪽 판 폭을 나눠 쓴다).
+    static func width(columns n: Int) -> CGFloat { CGFloat(n) * 300 }
 
-    /// 칼럼이 늘거나 줄 때 서랍 너비를 바꿔 달라고 요청한다.
-    var onWantWidth: (CGFloat) -> Void = { _ in }
+    /// 크기 단추를 눌렀을 때 서랍 폭을 바꿔 달라고 요청한다.
+    var onSize: (CGFloat) -> Void = { _ in }
+    /// 가장자리를 끌어 크기를 바꾼 뒤
+    var onUserResize: () -> Void = {}
 
     private func build(size: CGSize) {
-        let sideWidth = Self.sideWidth, bar = Self.bar
+        let sideWidth = Self.sideWidth, bar = Self.bar, inset = Self.inset
 
         // 왼쪽: 저장한 폴더
         let column = NSTableColumn(identifier: .init("folder"))
@@ -329,32 +362,47 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         scroll.isHidden = true
         view.addSubview(scroll)
 
-        // 위: [최근] [고정 폴더…] [+] 칩 줄. 폴더를 끌어 놓으면 추가
-        chips.frame = CGRect(x: 12, y: size.height - Self.chipBar + 8, width: size.width - 24, height: 28)
-        chips.autoresizingMask = [.width, .minYMargin]
+        // 위: [최근] [고정 폴더…] [+] 칩 줄. 폴더를 끌어 놓으면 추가. 오른쪽에 크기 세 칸과 고정 단추.
+        chips.frame = CGRect(x: 12, y: size.height - Self.chipBar + 12, width: size.width - 24, height: 26)
+        chips.autoresizingMask = [.minYMargin]
         chips.orientation = .horizontal; chips.spacing = 6
-        chips.onDrop = { [weak self] urls in
-            guard let self else { return }
-            self.message.stringValue = urls.compactMap { self.store.add($0) }.first ?? ""
-            self.table.reloadData(); self.rebuildChips()
-            self.table.selectRowIndexes([self.store.folders.count - 1], byExtendingSelection: false)
-        }
+        chips.onDrop = { [weak self] urls in self?.addFolders(urls) }
         view.addSubview(chips)
-        let chipLine = NSBox(frame: CGRect(x: 0, y: size.height - Self.chipBar, width: size.width, height: 1))
-        chipLine.boxType = .separator; chipLine.autoresizingMask = [.width, .minYMargin]
-        view.addSubview(chipLine)
+        sizeSegment.autoresizingMask = [.minXMargin, .minYMargin]
+        sizeSegment.onPick = { [weak self] n in self?.onSize(Self.width(columns: n)) }
+        view.addSubview(sizeSegment)
+        pinButton.isOn = store.pinned
+        pinButton.action = { [weak self] in self?.togglePin() }
+        pinButton.autoresizingMask = [.minXMargin, .minYMargin]
+        view.addSubview(pinButton)
+        layoutHeader(width: size.width, height: size.height)
 
-        // 오른쪽: 칼럼 탐색. 칼럼 너비는 고정이고, 칼럼이 늘면 서랍이 넓어진다.
-        browser.frame = CGRect(x: sideWidth + 1, y: bar, width: size.width - sideWidth - 1, height: size.height - bar - Self.chipBar - 2)
+        // 가운데: 안쪽 판(모서리 10, 바탕 흰색 0.62 / 검정 0.2, 0.5pt 선). 칼럼·최근·빈 상태가 같은 자리에서 바뀐다.
+        sheet.frame = CGRect(x: inset, y: bar, width: size.width - 2 * inset, height: size.height - bar - Self.chipBar)
+        sheet.autoresizingMask = [.width, .height]
+        sheet.wantsLayer = true
+        sheet.layer?.cornerRadius = 10
+        sheet.layer?.masksToBounds = true
+        sheet.layer?.borderWidth = 0.5
+        view.addSubview(sheet)
+        let sheetSkin = DrawerSkin(frame: sheet.bounds, part: .sheet)
+        sheetSkin.autoresizingMask = [.width, .height]
+        sheet.addSubview(sheetSkin)
+
+        // 칼럼 탐색. 창 폭은 그대로 두고, 깊이 들어가면 칼럼이 왼쪽으로 밀린다.
+        browser.frame = sheet.bounds
         browser.autoresizingMask = [.width, .height]
         browser.delegate = self
         browser.onEscape = { [weak self] in self?.onClose() }
+        browser.onDragEnd = { [weak self] in self?.showDrop(nil) }
         browser.isTitled = false
-        browser.hasHorizontalScroller = true
+        browser.hasHorizontalScroller = false   // 시스템 막대 대신 아래 위치 막대
         browser.separatesColumns = true
         browser.allowsMultipleSelection = true
-        // 칼럼마다 넉넉한 고정 폭. 칼럼 사이 경계를 끌어 폭을 바꿀 수도 있다.
-        browser.columnResizingType = .userColumnResizing
+        browser.backgroundColor = .clear
+        browser.setCellClass(DSBrowserCell.self)
+        browser.rowHeight = 24
+        browser.columnResizingType = .noColumnResizing   // 칼럼 폭은 판 폭을 나눠 정한다(아래 손잡이 없음)
         browser.minColumnWidth = 200
         browser.setDefaultColumnWidth(Self.columnWidth)
         browser.target = self
@@ -366,68 +414,103 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         let itemMenu = NSMenu()
         itemMenu.delegate = self
         browser.menu = itemMenu
-        view.addSubview(browser)
+        sheet.addSubview(browser)
+
+        // 칼럼 위치 막대(높이 4, 좌우 8, 아래 3)
+        positionBar.frame = CGRect(x: 8, y: 3, width: sheet.bounds.width - 16, height: 4)
+        positionBar.autoresizingMask = [.width]
+        positionBar.isHidden = true
+        sheet.addSubview(positionBar)
 
         // '최근' 목록(브라우저 자리에 겹쳐 보인다)
-        recentScroll.frame = browser.frame
+        recentScroll.frame = sheet.bounds
         recentScroll.autoresizingMask = [.width, .height]
         recentScroll.drawsBackground = false; recentScroll.hasVerticalScroller = true
+        recentScroll.contentInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
         recentTable.addTableColumn(NSTableColumn(identifier: .init("recent")))
-        recentTable.headerView = nil; recentTable.rowHeight = 40; recentTable.style = .plain
+        recentTable.headerView = nil; recentTable.rowHeight = 44; recentTable.style = .plain
+        recentTable.intercellSpacing = .zero
         recentTable.backgroundColor = .clear
         recentTable.dataSource = self; recentTable.delegate = self
         recentTable.target = self; recentTable.doubleAction = #selector(openRecent)
         recentTable.setDraggingSourceOperationMask([.copy, .move], forLocal: false)
         recentScroll.documentView = recentTable
         recentScroll.isHidden = true
-        view.addSubview(recentScroll)
-        let line = NSBox(frame: CGRect(x: sideWidth, y: bar - 1, width: size.width - sideWidth, height: 1))
-        line.boxType = .separator
-        line.autoresizingMask = [.width]
-        view.addSubview(line)
+        sheet.addSubview(recentScroll)
 
-        // 하단: 지금 보고 있는 경로. 경로의 칸을 누르면 그 폴더로 간다.
-        pathControl.frame = CGRect(x: sideWidth + 8, y: 26, width: size.width - sideWidth - 90, height: 22)
-        pathControl.autoresizingMask = [.width]
-        pathControl.pathStyle = .standard
-        pathControl.controlSize = .small
-        pathControl.focusRingType = .none
-        pathControl.target = self
-        pathControl.action = #selector(pathClicked)
-        view.addSubview(pathControl)
+        // 빈 상태: 가운데 점선 판. 폴더를 놓으면 서랍에 넣는다.
+        emptyBoard.frame = sheet.bounds
+        emptyBoard.autoresizingMask = [.width, .height]
+        emptyBoard.onAdd = { [weak self] in self?.addFolder() }
+        emptyBoard.onDrop = { [weak self] urls in self?.addFolders(urls) }
+        emptyBoard.isHidden = true
+        sheet.addSubview(emptyBoard)
 
-        message.frame = CGRect(x: sideWidth + 12, y: 6, width: size.width - sideWidth - 24, height: 16)
-        message.autoresizingMask = [.width]
-        message.textColor = .secondaryLabelColor
-        message.font = .systemFont(ofSize: 11)
-        message.lineBreakMode = .byTruncatingTail
-        view.addSubview(message)
-
-        let finder = NSButton(image: NSImage(systemSymbolName: "macwindow", accessibilityDescription: "Finder에서 열기")!,
-                              target: self, action: #selector(openInFinder))
-        finder.isBordered = false
-        finder.toolTip = "Finder에서 열기"
-        finder.frame = CGRect(x: size.width - 72, y: 24, width: 26, height: 24)
+        // 아래 줄(32, 한 줄): 경로 또는 안내 문구, 오른쪽 끝 Finder 단추
+        let finder = DSIconButton(image: DS.win(16), tip: "Finder에서 열기") { [weak self] in self?.openInFinder() }
+        finder.frame.origin = CGPoint(x: size.width - 8 - 28, y: (bar - 26) / 2)
         finder.autoresizingMask = [.minXMargin]
         view.addSubview(finder)
 
-        pinButton.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "서랍 고정")
-        pinButton.alternateImage = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "서랍 고정 풀기")
-        pinButton.setButtonType(.toggle)
-        pinButton.isBordered = false
-        pinButton.state = store.pinned ? .on : .off
-        pinButton.toolTip = "서랍 고정"
-        pinButton.target = self
-        pinButton.action = #selector(togglePin)
-        pinButton.frame = CGRect(x: size.width - 40, y: 24, width: 26, height: 24)
-        pinButton.autoresizingMask = [.minXMargin]
-        view.addSubview(pinButton)
+        crumbs.frame = CGRect(x: 16, y: (bar - 18) / 2, width: size.width - 16 - 8 - 28 - 8, height: 18)
+        crumbs.autoresizingMask = [.width]
+        crumbs.onGo = { [weak self] in self?.navigate(to: $0) }
+        view.addSubview(crumbs)
+
+        dropIcon.frame = CGRect(x: 16, y: (bar - 14) / 2, width: 14, height: 14)
+        dropIcon.contentTintColor = DS.dropText
+        dropIcon.isHidden = true
+        view.addSubview(dropIcon)
+        message.frame = crumbs.frame
+        message.autoresizingMask = [.width]
+        message.textColor = DS.ink2
+        message.font = .systemFont(ofSize: 11.5)
+        message.lineBreakMode = .byTruncatingTail
+        message.onChange = { [weak self] in self?.updateFoot() }
+        view.addSubview(message)
+        updateFoot()
 
         // 네 변과 네 모서리 어디서든 크기를 바꾼다(테두리 없는 창이라 직접 처리)
         for edge in ResizeEdge.Kind.allCases {
             let e = ResizeEdge(kind: edge, in: CGRect(origin: .zero, size: size))
+            e.onEnd = { [weak self] in self?.onUserResize() }
             view.addSubview(e)
         }
+    }
+
+    /// 칩 줄 오른쪽: [크기 세 칸] 8 [고정](오른쪽 여백 10). 칩은 크기 단추 왼쪽 14까지.
+    private func layoutHeader(width: CGFloat, height: CGFloat) {
+        let ring = DSPinButton.ring, pw = pinButton.pillWidth
+        let pillX = width - 10 - pw
+        pinButton.frame = CGRect(x: pillX - ring, y: height - Self.chipBar + 11 - ring, width: pw + 2 * ring, height: 28 + 2 * ring)
+        let seg = DSSizeSegment.size
+        sizeSegment.frame = CGRect(x: pillX - 8 - seg.width, y: height - Self.chipBar + 11, width: seg.width, height: seg.height)
+        chips.frame.size.width = max(0, sizeSegment.frame.minX - 14 - chips.frame.minX)
+    }
+
+    /// 안내 문구가 있으면 그 문구, 없으면 경로
+    private func updateFoot() {
+        let hasMessage = !message.stringValue.isEmpty
+        crumbs.isHidden = hasMessage
+        message.isHidden = !hasMessage
+    }
+
+    /// 끌어 넣는 중: 아래 줄에 파란 문구, 놓을 폴더 줄에 파란 테
+    private var dropMark: (row: Int, column: Int)?
+    private func showDrop(_ text: String?) {
+        let dropping = text != nil
+        dropIcon.isHidden = !dropping
+        message.font = .systemFont(ofSize: 11.5, weight: dropping ? NSFont.Weight(0.36) : .regular)
+        message.textColor = dropping ? DS.dropText : DS.ink2
+        message.frame.origin.x = dropping ? 16 + 14 + 6 : 16
+        if !dropping, dropMark != nil { dropMark = nil; browser.redrawCells() }
+        if dropping || message.stringValue.hasPrefix("‘") && message.stringValue.contains("폴더로 ") { message.stringValue = text ?? "" }
+    }
+
+    private func addFolders(_ urls: [URL]) {
+        message.stringValue = urls.compactMap { store.add($0) }.first ?? ""
+        table.reloadData(); rebuildChips()
+        table.selectRowIndexes([store.folders.count - 1], byExtendingSelection: false)
     }
 
     // MARK: 경로와 너비
@@ -441,20 +524,24 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 
     @objc private func browserClicked() { updateLayout() }
 
-    /// 고른 깊이만큼 칼럼이 보이도록 필요하면 서랍을 넓히고, 하단 경로를 갱신한다.
-    /// 칼럼 수는 지금 너비에 맞춰 정한다(사용자가 크기를 바꾸면 따라간다).
-    func updateLayout() {
-        let need = (browser.selectionIndexPath?.count ?? 0) + 1
-        if need > Int(browser.bounds.width / Self.columnWidth) {
-            onWantWidth(Self.sideWidth + 1 + CGFloat(need) * Self.columnWidth)
-        }
-        pathControl.url = currentURL
-        browser.scrollColumnToVisible(browser.lastColumn)
-    }
+    private var appliedColumnWidth: CGFloat = 0
 
-    @objc private func pathClicked() {
-        guard let url = pathControl.clickedPathItem?.url else { return }
-        navigate(to: url)
+    /// 창 폭은 바꾸지 않는다. 칼럼은 안쪽 판 폭을 칼럼 수(폭 ÷ 300, 2개 이상)로 나눠 쓰고, 깊이 들어가면 왼쪽으로 밀린다.
+    func updateLayout() {
+        let w = browser.bounds.width
+        let n = max(2, Int((view.bounds.width / Self.columnWidth).rounded()))
+        let colW = floor(w / CGFloat(n))
+        if colW > 0, colW != appliedColumnWidth {
+            appliedColumnWidth = colW
+            browser.setDefaultColumnWidth(colW)
+            if browser.lastColumn >= 0 { for c in 0...browser.lastColumn { browser.setWidth(colW, ofColumn: c) } }
+        }
+        sizeSegment.selected = [2, 3, 4].first { abs(view.bounds.width - Self.width(columns: $0)) <= 2 }
+        layoutHeader(width: view.bounds.width, height: view.bounds.height)
+        crumbs.show(root: showingRecent || store.folders.isEmpty ? nil : root?.url, current: currentURL)
+        browser.scrollColumnToVisible(browser.lastColumn)
+        let total = max(browser.lastColumn, browser.lastVisibleColumn) + 1
+        positionBar.show(first: browser.isHidden ? 0 : browser.firstVisibleColumn, visible: n, total: total)
     }
 
     /// 경로로 이동. 시작 폴더 안이면 그 깊이까지 칼럼을 펼치고, 바깥(위쪽)이면 그 폴더를 새 시작점으로 삼는다.
@@ -502,14 +589,15 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
     private func recentCell(_ item: RecentFiles.Item) -> NSView {
         let cell = NSTableCellView()
         let icon = NSImageView(image: NSWorkspace.shared.icon(forFile: item.url.path))
-        icon.frame = CGRect(x: 8, y: 4, width: 32, height: 32)
-        let name = NSTextField(labelWithString: item.url.lastPathComponent)
-        name.font = .systemFont(ofSize: 13, weight: .semibold); name.lineBreakMode = .byTruncatingMiddle
-        name.frame = CGRect(x: 48, y: 20, width: 420, height: 17)
+        icon.frame = CGRect(x: 16, y: 7, width: 30, height: 30)
+        let name = DS.label(item.url.lastPathComponent, size: 13, weight: .semibold)
+        name.lineBreakMode = .byTruncatingMiddle
+        name.frame = CGRect(x: 56, y: 22, width: 420, height: 16)
+        name.autoresizingMask = [.width]
         let f = RelativeDateTimeFormatter(); f.locale = Locale(identifier: "ko_KR"); f.unitsStyle = .short
-        let sub = NSTextField(labelWithString: item.folder + " · " + f.localizedString(for: item.date, relativeTo: Date()))
-        sub.font = .systemFont(ofSize: 11); sub.textColor = .secondaryLabelColor
-        sub.frame = CGRect(x: 48, y: 4, width: 420, height: 15)
+        let sub = DS.label(item.folder + " · " + f.localizedString(for: item.date, relativeTo: Date()), size: 11.5, color: DS.ink2)
+        sub.frame = CGRect(x: 56, y: 6, width: 420, height: 14)
+        sub.autoresizingMask = [.width]
         [icon, name, sub].forEach(cell.addSubview)
         return cell
     }
@@ -566,7 +654,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         store.pinned = true            // 고르는 동안 서랍이 닫히지 않게
         NSApp.activate()
         let ok = panel.runModal() == .OK
-        store.pinned = pinButton.state == .on
+        store.pinned = pinButton.isOn
         guard ok else { return }
         message.stringValue = panel.urls.compactMap { store.add($0) }.first ?? ""
         table.reloadData(); rebuildChips()
@@ -591,7 +679,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 
     private func showRoot(_ node: FileNode?) {
         root = node
-        message.stringValue = node == nil && store.folders.isEmpty ? "위 ‘+’로 자주 가는 폴더를 넣어 주세요" : ""
+        message.stringValue = ""
         browser.loadColumnZero()
         if let node, node.denied { message.stringValue = Self.deniedMessage }
         updateLayout()
@@ -622,10 +710,20 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         attachment.bounds = CGRect(x: 0, y: -4, width: 18, height: 18)
         let s = NSMutableAttributedString(attachment: attachment)
         s.append(NSAttributedString(string: "  " + node.name))
+        s.addAttributes([.font: NSFont.systemFont(ofSize: 13), .foregroundColor: DS.ink], range: NSRange(location: 0, length: s.length))
         let p = NSMutableParagraphStyle()
         p.lineBreakMode = .byTruncatingMiddle
         s.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: s.length))
         return s
+    }
+
+    /// 지나온 폴더·지금 폴더·놓을 폴더를 칠한다
+    func browser(_ sender: NSBrowser, willDisplayCell cell: Any, atRow row: Int, column: Int) {
+        guard let cell = cell as? DSBrowserCell else { return }
+        cell.node = sender.item(atRow: row, inColumn: column) as? FileNode
+        if let d = dropMark, d.row == row, d.column == column { cell.mark = .drop; return }
+        let selected = sender.selectedRowIndexes(inColumn: column)?.contains(row) ?? false
+        cell.mark = !selected ? .none : column == sender.selectedColumn ? .current : .path
     }
 
     /// 파일을 고르면 다음 칸에 미리보기
@@ -645,7 +743,11 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         if let current { NSWorkspace.shared.activateFileViewerSelecting([current]) }
     }
 
-    @objc private func togglePin() { store.pinned = pinButton.state == .on }
+    private func togglePin() {
+        pinButton.isOn.toggle()
+        store.pinned = pinButton.isOn
+        layoutHeader(width: view.bounds.width, height: view.bounds.height)
+    }
 
     // MARK: Finder 같은 기본 동작 (오른쪽 클릭 메뉴와 단축키)
 
@@ -856,8 +958,16 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
 
     func browser(_ browser: NSBrowser, validateDrop info: NSDraggingInfo, proposedRow row: UnsafeMutablePointer<Int>,
                  column: UnsafeMutablePointer<Int>, dropOperation: UnsafeMutablePointer<NSBrowser.DropOperation>) -> NSDragOperation {
-        guard dropTarget(row: row.pointee, column: column.pointee, operation: dropOperation.pointee) != nil else { return [] }
-        return NSEvent.modifierFlags.contains(.option) ? .copy : .move
+        guard let target = dropTarget(row: row.pointee, column: column.pointee, operation: dropOperation.pointee) else { showDrop(nil); return [] }
+        // 다른 디스크에서 오면 복사(받는 쪽 규칙과 같게)
+        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let volume = { (u: URL) in try? u.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject }
+        let dest = volume(target.url)
+        let copy = NSEvent.modifierFlags.contains(.option) || urls.contains { volume($0) == nil || volume($0) != dest }
+        let mark = dropOperation.pointee == .on && target !== parentNode(ofColumn: column.pointee) ? (row.pointee, column.pointee) : nil
+        if mark?.0 != dropMark?.row || mark?.1 != dropMark?.column { dropMark = mark.map { (row: $0.0, column: $0.1) }; self.browser.redrawCells() }
+        showDrop(copy ? "‘\(target.name)’ 폴더로 복사해요" : "‘\(target.name)’ 폴더로 옮겨요 · ⌥를 누르면 복사")
+        return copy ? .copy : .move
     }
 
     func browser(_ browser: NSBrowser, acceptDrop info: NSDraggingInfo, atRow row: Int, column: Int,
@@ -865,6 +975,7 @@ final class DrawerController: NSObject, NSTableViewDataSource, NSTableViewDelega
         guard let target = dropTarget(row: row, column: column, operation: dropOperation) else { return false }
         let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         let failed = store.receive(urls, into: target.url, copy: NSEvent.modifierFlags.contains(.option))
+        showDrop(nil)
         message.stringValue = failed > 0 ? "\(failed)개를 넣지 못했어요" : ""
         target.reload()
         // 원본이 다른 칼럼에 보이고 있었다면 그쪽 목록도 다시 읽는다
@@ -917,6 +1028,7 @@ final class ResizeEdge: NSView {
     enum Kind: CaseIterable { case left, right, top, bottom, topLeft, topRight, bottomLeft, bottomRight }
     private let kind: Kind
     private var start: (mouse: CGPoint, frame: CGRect)?
+    var onEnd: () -> Void = {}
     private static let edge: CGFloat = 8, corner: CGFloat = 16
 
     init(kind: Kind, in b: CGRect) {
@@ -970,5 +1082,50 @@ final class ResizeEdge: NSView {
         window.setFrame(f, display: true)
     }
 
-    override func mouseUp(with event: NSEvent) { start = nil }
+    override func mouseUp(with event: NSEvent) {
+        if let start, start.frame != window?.frame { onEnd() }
+        start = nil
+    }
 }
+
+/// 아래 줄 안내 문구. 문구가 바뀌면 경로와 자리를 바꾼다.
+final class DrawerMessage: NSTextField {
+    var onChange: () -> Void = {}
+    override var stringValue: String { didSet { onChange() } }
+}
+
+/// 서랍 판의 칠(유리 위 옅은 칠)과 테두리, 안쪽 판 바탕. 모드가 바뀌면 다시 칠한다.
+final class DrawerSkin: NSView {
+    enum Part { case tint, edge, sheet }
+    private let part: Part
+    private let top = CALayer()
+    init(frame: NSRect, part: Part) {
+        self.part = part
+        super.init(frame: frame)
+        wantsLayer = true
+        if part == .edge {
+            layer?.cornerRadius = 14
+            layer?.borderWidth = 0.5
+            top.frame = CGRect(x: 14, y: frame.height - 1, width: max(0, frame.width - 28), height: 1)
+            layer?.addSublayer(top)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
+    override func layout() {
+        super.layout()
+        top.frame = CGRect(x: 14, y: bounds.height - 1, width: max(0, bounds.width - 28), height: 1)
+    }
+    override func updateLayer() {
+        switch part {
+        case .tint: layer?.backgroundColor = DS.glass.cgColor
+        case .edge: layer?.borderColor = DS.edge.cgColor; top.backgroundColor = DS.hi.cgColor
+        case .sheet:
+            layer?.backgroundColor = DS.sheet.cgColor
+            superview?.layer?.borderColor = DS.hair.cgColor
+        }
+    }
+}
+

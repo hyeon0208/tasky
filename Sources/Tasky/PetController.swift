@@ -717,7 +717,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
     func petClicked() {
         seeAgents()
         hoverRingWork?.cancel()
-        drawerOutsideClick()   // 펫을 눌러도 바깥 클릭처럼 닫는다(끌기는 닫지 않고 함께 움직임)
+        if !DrawerStore.shared.pinned, drawer != nil { closeDrawer() }   // 펫을 눌러도 바깥 클릭처럼 닫는다(끌기는 닫지 않고 함께 움직임)
         touched()
         stopMoving()
         if petView.showsCharacter, pokes.poke() { closeRing(); petView.react(.sulk); return }
@@ -1735,12 +1735,15 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let store = DrawerStore.shared
         store.pinned = pinned
 
-        // 크기는 마지막으로 쓴 크기를 기억한다. 처음에는 칼럼 3개가 넉넉히 보이는 크기.
+        // 크기는 사용자가 크기 단추나 가장자리 끌기로 바꾼 크기만 기억한다. 처음에는 보통(칼럼 3개).
         let v = screen.visibleFrame
         let d = UserDefaults.standard
+        if !d.bool(forKey: "drawerWClamped") {   // 예전 버전이 자동으로 넓혀 저장한 큰 폭은 처음 한 번 크게(칼럼 4개) 이하로
+            d.set(true, forKey: "drawerWClamped")
+            if d.double(forKey: "drawerW") > DrawerController.width(columns: 4) { d.set(DrawerController.width(columns: 4), forKey: "drawerW") }
+        }
         let size = CGSize(
-            width: min(d.double(forKey: "drawerW") > 0 ? d.double(forKey: "drawerW")
-                       : DrawerController.sideWidth + 1 + 3 * DrawerController.columnWidth, v.width - 16),
+            width: min(d.double(forKey: "drawerW") > 0 ? d.double(forKey: "drawerW") : DrawerController.width(columns: 3), v.width - 16),
             height: min(d.double(forKey: "drawerH") > 0 ? d.double(forKey: "drawerH") : 560, v.height - 16))
         let shown = pet.frame.intersection(v)
         let c = Geometry.visibleCenter(of: pet.frame, in: v)
@@ -1758,21 +1761,29 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let panel = FloatingPanel(size: size)
         panel.keyable = true            // 클릭하면 키 입력(스페이스, Esc)을 받는다. 열 때는 포커스를 가져가지 않는다
         panel.styleMask.insert(.resizable)
-        panel.minSize = CGSize(width: DrawerController.sideWidth + 2 * DrawerController.columnWidth, height: 320)
+        panel.minSize = CGSize(width: DrawerController.width(columns: 2), height: 320)
+        panel.hasShadow = true
         panel.isMovable = true
         panel.isMovableByWindowBackground = true   // 빈 곳(아래 막대 등)을 끌어 옮긴다
         panel.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: false)
         let content = DrawerController(size: size, onClose: { [weak self] in self?.closeDrawer() })
-        // 더 깊이 들어가 칼럼이 모자라면 넓힌다(줄이지는 않는다)
-        content.onWantWidth = { [weak panel] width in
-            guard let panel, width > panel.frame.width else { return }
+        // 크기 단추: 곰 쪽 변을 붙박고 반대쪽으로 자라거나 준다. 화면을 넘으면 안으로 밀고, 그래도 모자라면 화면 폭 − 16까지.
+        let saveSize = { [weak panel] in
+            guard let panel else { return }
+            d.set(panel.frame.width, forKey: "drawerW")
+            d.set(panel.frame.height, forKey: "drawerH")
+        }
+        content.onSize = { [weak panel] width in
+            guard let panel else { return }
             let w = min(width, v.width - 16)
             var f = panel.frame
             if growsLeft { f.origin.x = f.maxX - w }
             f.size.width = w
             f.origin.x = min(max(f.origin.x, v.minX + 8), v.maxX - w - 8)
             panel.setFrame(f, display: true)
+            saveSize()
         }
+        content.onUserResize = saveSize
         panel.contentView = content.view
         content.updateLayout()
         panel.orderFrontRegardless()
@@ -1782,14 +1793,16 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         drawerResizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: panel, queue: .main) { [weak content] _ in content?.updateLayout() }
 
-        // 서랍 밖을 클릭하면 닫는다(고정하면 안 닫힘). 다른 앱 클릭과 이 앱의 다른 창 클릭을 모두 본다.
+        // 서랍 밖을 눌렀다가 끌지 않고 떼면 닫는다(고정하면 안 닫힘). 누르는 순간 닫지 않아서,
+        // 고정하지 않아도 다른 앱에서 파일을 끌어 와 서랍에 넣을 수 있다. 다른 앱과 이 앱의 다른 창을 모두 본다.
         drawerMonitors = [
-            NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.drawerOutsideClick()
+            NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp, .rightMouseUp]) { [weak self] e in
+                self?.drawerOutsideMouse(e, outside: true)
             },
-            NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
-                if let self, let drawer = self.drawer, e.window !== drawer, e.window !== self.pet, !(e.window is QLPreviewPanel), NSApp.modalWindow == nil {
-                    self.drawerOutsideClick()
+            NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp, .rightMouseUp]) { [weak self] e in
+                if let self, let drawer = self.drawer {
+                    let outside = e.window !== drawer && e.window !== self.pet && !(e.window is QLPreviewPanel) && NSApp.modalWindow == nil
+                    self.drawerOutsideMouse(e, outside: outside)
                 }
                 return e
             },
@@ -1798,19 +1811,26 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
 
     private var drawerMonitors: [Any] = []
     private var drawerResizeObserver: Any?
+    /// 서랍 밖에서 누른 자리(끌었는지 보려고)
+    private var drawerPressAt: CGPoint?
 
-    private func drawerOutsideClick() {
-        if !DrawerStore.shared.pinned { closeDrawer() }
+    private func drawerOutsideMouse(_ e: NSEvent, outside: Bool) {
+        switch e.type {
+        case .leftMouseDown, .rightMouseDown:
+            drawerPressAt = outside ? NSEvent.mouseLocation : nil
+        default:
+            guard let start = drawerPressAt else { return }
+            drawerPressAt = nil
+            let p = NSEvent.mouseLocation
+            if hypot(p.x - start.x, p.y - start.y) < 4, !DrawerStore.shared.pinned { closeDrawer() }
+        }
     }
 
     private func closeDrawer() {
         drawerMonitors.forEach(NSEvent.removeMonitor)
         drawerMonitors = []
         if let o = drawerResizeObserver { NotificationCenter.default.removeObserver(o); drawerResizeObserver = nil }
-        if let drawer {
-            UserDefaults.standard.set(drawer.frame.width, forKey: "drawerW")
-            UserDefaults.standard.set(drawer.frame.height, forKey: "drawerH")
-        }
+        drawerPressAt = nil
         drawer?.orderOut(nil)
         drawer = nil
         drawerContent = nil
