@@ -1,10 +1,11 @@
 # Tasky 홍보 사이트 plan
 
-- 상태: done (배포 전)
+- 상태: done (배포됨 https://tasky-site-one.vercel.app)
 - 작성일: 2026-11-07
 - spec: ./spec.md
 - 변경 이력
   - 2026-11-07: 최초 작성
+  - 2026-11-07: tasky 저장소 site/로 옮김(adad6e5), Vercel 배포
 
 ## 목표
 c2와 똑같이 보이는 정적 사이트에서, 클릭 한 번으로 최신 .dmg/.zip을 받고 상태별 소식·복사 실패·클릭 이벤트가 spec대로 동작한다.
@@ -59,10 +60,11 @@ c2와 똑같이 보이는 정적 사이트에서, 클릭 한 번으로 최신 .d
 - [x] 완료
 
 ## Not now
-- Vercel 프로젝트 생성·배포(승인 후) · 앱 `release.sh` 수정과 v1.4.0 이름 고정 파일 업로드(앱 폴더) · 릴리스 노트 쓰기(앱) · `/<unique-path>` 교체(대시보드에서 켠 뒤) · 영상 재촬영
+- 릴리스 노트 쓰기(앱) · `/<unique-path>` 교체(대시보드에서 켠 뒤) · 영상 재촬영
 
 ## 진행 기록
 - [x] 1  - [x] 2  - [x] 3  - [x] 4  - [x] 5 (375px는 Chrome 창 최소 폭 500px로 대신 확인)
+- [x] 배포 2026-11-07: hyeon0208/tasky의 site/를 Vercel `tasky-site`(대시보드에서 직접 Import, Root Directory site)에 git 연결, `vercel.json` ignoreCommand로 site/ 바뀐 커밋만 배포. 운영 주소 https://tasky-site-one.vercel.app 200, 받은 index.html이 저장소와 같음, 미디어 200, `[data-dl]` 3곳 → `releases/latest/download/Tasky.dmg`(302 → v1.4.0/Tasky.dmg), 1곳 → Tasky.zip. GitHub API `releases/latest` = v1.4.0(Tasky.dmg·Tasky.zip 포함). 화면의 버전 글자는 브라우저로 보지 않음. `/_vercel/insights/script.js` 404(Analytics 아직 안 켬)
 
 ## 결정(Ruling)
 - 2026-11-07 단계 2: 테스트 가능한 두 함수만 분리하고 나머지는 c2 구조 유지 — 최소 변경 — 틀리면 함수 두 개 인라인으로 되돌리면 됨
