@@ -1204,8 +1204,14 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
         let keyTest = KeyTestField()
         settingsKeepAlive.append(keyTest)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "개발 빌드"
-        func link(_ title: String, _ url: String) -> NSView {
-            let b = ClosureButton(title) { NSWorkspace.shared.open(URL(string: url)!) }
+        let contactNote = hint("버그·기여 문의 · 누르면 주소가 복사돼요")
+        func copyButton(_ text: String) -> NSView {
+            let b = ClosureButton(text) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                contactNote.stringValue = "복사했어요"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { contactNote.stringValue = "버그·기여 문의 · 누르면 주소가 복사돼요" }
+            }
             b.bezelStyle = .inline
             return b
         }
@@ -1296,7 +1302,7 @@ final class PetController: NSObject, PetViewDelegate, NSWindowDelegate {
                 [label("업데이트"), ClosureButton("지금 확인") { Updater.checkNow() }],
                 [label("자동으로 확인"), SettingsTabs.toggle(Updater.automatic) { Updater.automatic = $0 }, hint("새 버전이 나오면 알려 줘요")],
             ] : []) + [
-                [label("만든 곳"), link("github.com/hyeon0208/tasky", "https://github.com/hyeon0208/tasky"), hint("MIT 라이선스 · 버그와 제안은 GitHub 이슈로")],
+                [label("문의"), copyButton("nextmade.studio@gmail.com"), contactNote],
                 [label("데이터 저장 위치"), NSTextField(labelWithString: "이 Mac에만"), hint("설정·클립보드 기록·서랍은 이 Mac에만 저장되고 어디로도 보내지 않아요. 할 일·일정은 macOS '미리 알림'·'캘린더' 앱에 저장돼요.")],
             ]), ("권한 — 쓰는 기능을 켰을 때만 물어요", [
                 [label("입력 모니터링"), permission(CGPreflightListenEventAccess()), hint("한 키로 한영 바꾸기: 어떤 키를 눌렀는지만 판단하고 저장·전송하지 않아요")],
